@@ -2,4 +2,8 @@
 .env
 __pycache__/
 cache/
-server/data/
+cache1/
+data/
+data1/
+logs/
+DB/

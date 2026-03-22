@@ -1,0 +1,21 @@
+# Viagent — Video Analysis Agent
+# Python >= 3.10（推荐 3.11+；需与 LangGraph / LangChain 兼容）
+
+# 工作流与 LLM
+langgraph>=0.0.1
+langchain-core>=0.1.0
+langchain-openai>=0.1.0
+langchain-deepseek>=0.1.0
+
+# 配置与环境
+pydantic>=2.0.0
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# 视觉 / 数值（FFT、光流、特征点等）
+numpy>=1.24.0
+Pillow>=10.0.0
+opencv-contrib-python>=4.8.0
+
+# 可选：使用 src/apis 下 HTTP 客户端时
+requests>=2.28.0

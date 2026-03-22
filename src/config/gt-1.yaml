@@ -1,0 +1,46 @@
+# Viagent Configuration File
+# Paths can be overridden by environment variables (DATA_ROOT, CACHE_ROOT)
+
+# Experiment name (used for statistics and tracking)
+experiment_name: gt-1
+
+# Multi-Agent Workflow
+human_eyes_enabled: true
+planner_mode: true
+workflow_analysts:
+  - style
+  - physics
+  - spatial
+  - temporal
+  - watermark
+
+# Decision Policy
+decision_policy:
+  threshold_fake: 0.7
+  threshold_real: 0.3
+
+# Judge Dynamic Decision (three-stage: Strong Override -> Majority Vote -> Aggressive Fusion)
+judge_dynamic:
+  enabled: true
+  w_min: 0.05                    # Minimum weight for low-confidence agents
+  p: 2.0                         # Power for confidence weighting
+  m0: 0.05                       # Base margin for uncertain zone (reduced for more aggressive)
+  m1: 0.15                       # Additional margin based on low confidence (reduced)
+  k_disagree: 0.4                # Penalty factor for agent disagreement (reduced)
+  neutral_weight_multiplier: 0.2 # Weight multiplier for abstain (neutral-only) agents
+  vote_s_high: 0.8               # Score threshold for high fake vote
+  vote_s_low: 0.25               # Score threshold for low real vote
+  vote_c: 0.6                    # Confidence threshold for voting
+  strong_s: 0.85                 # Score threshold for strong evidence override
+  strong_c: 0.6                  # Confidence threshold for strong evidence override
+
+# LLM Configuration
+llm:
+  provider: yizhan
+  model: gpt-5.2-2025-12-11
+  max_images: 40  # 单次 LLM 调用允许的最大图片数，用于均匀抽样帧
+
+#gpt-5-mini
+#gemini-3-flash-preview
+#gpt-5.2-2025-12-11
+#gpt-5-nano-2025-08-07
