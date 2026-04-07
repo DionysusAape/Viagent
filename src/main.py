@@ -151,7 +151,7 @@ def main():
         "--label",
         type=str,
         required=True,
-        help="分析目标：单个视频路径（如 'Real/msrvtt_899.mp4'）、目录（如 'Real'）或 'all'（所有视频）",
+        help="分析目标：单个媒体路径（如 'Real/msrvtt_899.mp4'、'Fake/WildScrape/x.gif'）、目录或 'all'",
     )
 
     parser.add_argument(

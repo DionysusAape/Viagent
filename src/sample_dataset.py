@@ -6,10 +6,9 @@
 --------
 - 保持原有 `data/` 目录完全不动
 - 在同级目录下生成 `data1/`，目录结构与 `data/` 一致
-- 对每个“叶子目录”中的视频文件，按固定比例缩小
-  - 默认规则：每个目录抽样数量约为  N_dir / base_count
-  - 例如：某目录下有 560 个视频，base_count=56 → 抽样数 ≈ 560/56 = 10
-  - 每个目录至少保留 1 个样本
+- 对每个“叶子目录”中的视频文件抽样，二选一：
+  - **比例模式（默认）**：抽样数约为 N_dir / base_count；每个目录至少 min_per_dir 个
+  - **固定每类个数**：传入 ``--per-class K`` 时，每个含视频目录固定抽 min(K, N_dir) 个
 
 用法示例（在 src 目录下）：
     python sample_dataset.py
@@ -17,6 +16,7 @@
 可选参数：
     --src-root   源数据根目录（默认：../data）
     --dst-root   抽样后数据根目录（默认：../data1）
+    --per-class  每个含视频目录固定抽 K 个（与比例模式二选一，优先于 base-count）
     --base-count 基准样本数（默认：56）
     --min-per-dir 每个目录最少保留多少个样本（默认：1）
     --dry-run    只打印计划抽样结果，不实际复制文件
@@ -60,6 +60,31 @@ def os_walk_sorted(root: Path):
         yield dirpath, dirnames, filenames
 
 
+def uniform_sample_indices(total: int, n_target: int) -> List[int]:
+    """
+    从 total 条里确定性均匀抽取 n_target 条索引（覆盖前中后，可复现）。
+
+    n_target 已保证在 [1, total] 内；若 n_target == total 则全选。
+    """
+    if total <= 0 or n_target <= 0:
+        return []
+    n_target = min(n_target, total)
+    if n_target == total:
+        return list(range(total))
+
+    step = total / float(n_target)
+    indices = [int(i * step) for i in range(n_target)]
+    if indices[-1] != total - 1:
+        indices[-1] = total - 1
+
+    indices = sorted(set(indices))
+    while len(indices) < n_target:
+        cand = random.randrange(total)
+        if cand not in indices:
+            indices.append(cand)
+    return sorted(indices)
+
+
 def sample_indices(total: int, base_count: int, min_per_dir: int) -> List[int]:
     """
     根据总数 total 和基准 base_count 计算需要抽样的索引列表。
@@ -72,31 +97,13 @@ def sample_indices(total: int, base_count: int, min_per_dir: int) -> List[int]:
     if total <= 0:
         return []
 
-    # 计算目标样本数o1
     n_target = max(
         min_per_dir,
         int(round(total / float(base_count))) if base_count > 0 else total,
     )
     n_target = min(n_target, total)
 
-    if n_target == total:
-        return list(range(total))
-
-    # 均匀采样索引（不随机），保证稳定复现
-    step = total / float(n_target)
-    indices = [int(i * step) for i in range(n_target)]
-    # 确保最后一个样本是最后一条
-    if indices[-1] != total - 1:
-        indices[-1] = total - 1
-
-    # 去重并排序（极端情况下 step 可能导致重复）
-    indices = sorted(set(indices))
-    # 如果去重后数量变少，补齐到 n_target（用随机补）
-    while len(indices) < n_target:
-        cand = random.randrange(total)
-        if cand not in indices:
-            indices.append(cand)
-    return sorted(indices)
+    return uniform_sample_indices(total, n_target)
 
 
 def main() -> None:
@@ -117,10 +124,17 @@ def main() -> None:
         help=f"抽样后数据根目录（默认：{default_dst}）",
     )
     parser.add_argument(
+        "--per-class",
+        type=int,
+        default=None,
+        metavar="K",
+        help="每个含视频目录固定抽取 K 个（不超过该目录视频数）；指定后不再按 --base-count 比例计算",
+    )
+    parser.add_argument(
         "--base-count",
         type=int,
         default=56,
-        help="基准样本数，用于按 total/base_count 计算每个目录抽样数量（默认：56）",
+        help="基准样本数，用于按 total/base_count 计算每个目录抽样数量（默认：56）；与 --per-class 互斥",
     )
     parser.add_argument(
         "--min-per-dir",
@@ -146,6 +160,7 @@ def main() -> None:
     dst_root = Path(args.dst_root).resolve()
     base_count = args.base_count
     min_per_dir = args.min_per_dir
+    per_class = args.per_class
 
     if not src_root.exists():
         raise SystemExit(f"源目录不存在：{src_root}")
@@ -154,7 +169,16 @@ def main() -> None:
 
     print(f"📂 源数据根目录: {src_root}")
     print(f"📁 目标数据根目录: {dst_root}")
-    print(f"⚙️  抽样参数: base_count={base_count}, min_per_dir={min_per_dir}, seed={args.seed}")
+    if per_class is not None:
+        if per_class <= 0:
+            raise SystemExit("--per-class 须为正整数")
+        print(
+            f"⚙️  抽样参数: 每类固定 {per_class} 条（每目录不超过其实际数量）, seed={args.seed}"
+        )
+    else:
+        print(
+            f"⚙️  抽样参数: base_count={base_count}, min_per_dir={min_per_dir}, seed={args.seed}"
+        )
     if args.dry_run:
         print("🧪 运行模式: dry-run（不实际复制文件）")
 
@@ -178,15 +202,24 @@ def main() -> None:
         if n == 0:
             continue
 
-        indices = sample_indices(n, base_count, min_per_dir)
+        if per_class is not None:
+            n_take = min(per_class, n)
+            indices = uniform_sample_indices(n, n_take)
+        else:
+            indices = sample_indices(n, base_count, min_per_dir)
         sampled_files = [video_files[i] for i in indices]
 
         total_original += n
         total_sampled += len(sampled_files)
 
-        print(
-            f"- 目录: {rel_dir} | 原始: {n} | 抽样: {len(sampled_files)} (base_count={base_count})"
-        )
+        if per_class is not None:
+            print(
+                f"- 目录: {rel_dir} | 原始: {n} | 抽样: {len(sampled_files)} (per_class={per_class})"
+            )
+        else:
+            print(
+                f"- 目录: {rel_dir} | 原始: {n} | 抽样: {len(sampled_files)} (base_count={base_count})"
+            )
 
         if args.dry_run:
             continue

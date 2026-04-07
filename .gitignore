@@ -3,7 +3,11 @@
 __pycache__/
 cache/
 cache1/
+cache3/
 data/
 data1/
+data2/
+data3/
 logs/
+config/
 DB/

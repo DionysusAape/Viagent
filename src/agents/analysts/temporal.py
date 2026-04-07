@@ -8,6 +8,8 @@ from skill.temporal.local_phase_coherence import analyze_lpc_sequence
 from skill.temporal.feature_stability_check import analyze_feature_stability
 from util.logger import logger
 from util.frame_sampling import sample_frame_indices_for_llm
+from agents.routing.router_llm import pick_router_preview_frames, ROUTER_PREVIEW_MAX_FRAMES
+from agents.routing.temporal_skill_router import select_temporal_skill_ids
 
 
 def temporal_agent(state: GraphState) -> GraphState:
@@ -23,9 +25,6 @@ def temporal_agent(state: GraphState) -> GraphState:
     frame_inputs = artifacts.get("frame_inputs")
     meta = artifacts.get("meta")
 
-    # Note: Frame count check is done during conversion phase
-    # If insufficient frames, cache won't be created and workflow won't run
-    
     # Filter out None frames, 再根据上限选代表性帧
     all_valid_frames = [f for f in frame_inputs if f is not None]
     llm_conf = config.get("llm", {})
@@ -37,69 +36,89 @@ def temporal_agent(state: GraphState) -> GraphState:
     frame_count = len(sampled_frames)
 
     frame_timestamps = meta.get("frame_timestamps_sec") or []
-    # 按相同索引子采样时间戳，长度与 sampled_frames 对齐
     sampled_timestamps = [
         frame_timestamps[i] if i < len(frame_timestamps) else None
         for i in selected_indices
     ]
 
-    # Optional temporal CV evidence (local phase coherence on faces, feature stability)
     temporal_algo_evidence_parts = []
-    try:
-        frames_meta = artifacts.get("frames") or []
-        if frames_meta:
-            paths = get_evidence_paths(case.case_id)
-            frames_dir = paths["frames"]
-            
-            # Local Phase Coherence analysis
-            lpc_analysis = analyze_lpc_sequence(
-                frames_dir=frames_dir,
-                frames_meta=frames_meta,
-            )
-            if lpc_analysis is not None:
-                if lpc_analysis.has_face:
-                    logger.debug(f"Temporal LPC: detected face, adding evidence for {case.case_id}")
-                    temporal_algo_evidence_parts.append(
-                        "Temporal CV Evidence (local phase coherence around faces):\n"
-                        f"{lpc_analysis.summary}"
-                    )
-                else:
-                    logger.debug(f"Temporal LPC: no face detected for {case.case_id}")
-            else:
-                logger.debug(f"Temporal LPC: analysis returned None for {case.case_id}")
-            
-            # Feature Stability Check
-            feature_stability_analysis = analyze_feature_stability(
-                frames_dir=frames_dir,
-                frames_meta=frames_meta,
-            )
-            if feature_stability_analysis is not None:
-                if feature_stability_analysis.has_valid_tracking:
-                    logger.debug(f"Temporal feature stability: valid tracking (survival={feature_stability_analysis.survival_rate_10_frames:.1%}, smoothness={feature_stability_analysis.avg_trajectory_smoothness:.2f}, jerk={feature_stability_analysis.high_jerk_ratio:.1%}), adding evidence for {case.case_id}")
-                    temporal_algo_evidence_parts.append(
-                        "Temporal CV Evidence (feature point tracking stability):\n"
-                        f"{feature_stability_analysis.summary}"
-                    )
-                else:
-                    logger.debug(f"Temporal feature stability: no valid tracking for {case.case_id}")
-            else:
-                logger.debug(f"Temporal feature stability: analysis returned None for {case.case_id}")
-    except Exception as error:  # noqa: BLE001 - log and continue
-        logger.error(
-            f"Temporal CV skills failed for {case.case_id}: {error}"
+    frames_meta = artifacts.get("frames") or []
+    if frames_meta:
+        max_router_preview = int(
+            llm_conf.get("skill_router_max_preview_frames", ROUTER_PREVIEW_MAX_FRAMES)
         )
-    
+        router_preview = pick_router_preview_frames(sampled_frames, max_router_preview)
+        selected_skill_ids = select_temporal_skill_ids(
+            case, artifacts, config, router_preview
+        )
+        active = set(selected_skill_ids)
+        logger.info(f"{case.case_id} temporal sub-skills active: {selected_skill_ids}")
+        paths = get_evidence_paths(case.case_id)
+        frames_dir = paths["frames"]
+
+        if "lpc" in active:
+            try:
+                lpc_analysis = analyze_lpc_sequence(
+                    frames_dir=frames_dir,
+                    frames_meta=frames_meta,
+                )
+                if lpc_analysis is not None:
+                    if lpc_analysis.has_face:
+                        logger.debug(
+                            f"Temporal LPC: detected face, adding evidence for {case.case_id}"
+                        )
+                        temporal_algo_evidence_parts.append(
+                            "Temporal CV Evidence (local phase coherence around faces):\n"
+                            f"{lpc_analysis.summary}"
+                        )
+                    else:
+                        logger.debug(f"Temporal LPC: no face detected for {case.case_id}")
+                else:
+                    logger.debug(f"Temporal LPC: analysis returned None for {case.case_id}")
+            except Exception as error:  # noqa: BLE001
+                logger.error(f"Temporal LPC skill failed for {case.case_id}: {error}")
+
+        if "feature_stability" in active:
+            try:
+                feature_stability_analysis = analyze_feature_stability(
+                    frames_dir=frames_dir,
+                    frames_meta=frames_meta,
+                )
+                if feature_stability_analysis is not None:
+                    if feature_stability_analysis.has_valid_tracking:
+                        logger.debug(
+                            f"Temporal feature stability: valid tracking "
+                            f"(survival={feature_stability_analysis.survival_rate_10_frames:.1%}, "
+                            f"smoothness={feature_stability_analysis.avg_trajectory_smoothness:.2f}, "
+                            f"jerk={feature_stability_analysis.high_jerk_ratio:.1%}), "
+                            f"adding evidence for {case.case_id}"
+                        )
+                        temporal_algo_evidence_parts.append(
+                            "Temporal CV Evidence (feature point tracking stability):\n"
+                            f"{feature_stability_analysis.summary}"
+                        )
+                    else:
+                        logger.debug(
+                            f"Temporal feature stability: no valid tracking for {case.case_id}"
+                        )
+                else:
+                    logger.debug(
+                        f"Temporal feature stability: analysis returned None for {case.case_id}"
+                    )
+            except Exception as error:  # noqa: BLE001
+                logger.error(
+                    f"Temporal feature_stability skill failed for {case.case_id}: {error}"
+                )
+
     temporal_algo_evidence = ""
     if temporal_algo_evidence_parts:
         temporal_algo_evidence = "\n\n" + "\n\n".join(temporal_algo_evidence_parts) + "\n"
 
-    # Format frame URLs and timestamps for prompt
     frame_urls_str = ", ".join([f"Frame {i+1}" for i in range(frame_count)])
     timestamps_str = ", ".join(
         [f"{ts:.3f}" if ts is not None else "N/A" for ts in sampled_timestamps]
     )
 
-    # Format prompt with frame information and optional algorithm evidence
     prompt = TEMPORAL_PROMPT.format(
         frame_count=frame_count,
         frame_urls=frame_urls_str,
@@ -107,7 +126,6 @@ def temporal_agent(state: GraphState) -> GraphState:
         temporal_algo_evidence=temporal_algo_evidence,
     )
 
-    # Call LLM with structured output (with frame images)
     llm_response = call_llm(
         prompt=prompt,
         config=config["llm"],
@@ -115,7 +133,6 @@ def temporal_agent(state: GraphState) -> GraphState:
         images=sampled_frames
     )
 
-    # Convert LLM output directly to AgentResult
     result = AgentResult(
         agent=agent_name,
         status="ok",
@@ -133,8 +150,10 @@ def temporal_agent(state: GraphState) -> GraphState:
         error=None
     )
 
-    logger.info(f"Temporal analysis for {case.case_id}: score_fake={result.score_fake:.3f}, confidence={result.confidence:.3f}, reasoning: {llm_response.reasoning}")
+    logger.info(
+        f"Temporal analysis for {case.case_id}: score_fake={result.score_fake:.3f}, "
+        f"confidence={result.confidence:.3f}, reasoning: {llm_response.reasoning}"
+    )
     logger.log_agent_status(agent_name, case.case_id, "completed")
 
-    # Return only the new result entry (LangGraph will merge it with existing results)
     return {"results": {agent_name: result}}

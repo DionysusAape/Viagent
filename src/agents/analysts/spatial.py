@@ -6,6 +6,8 @@ from llm.prompt import SPATIAL_PROMPT
 from util.logger import logger
 from util.frame_sampling import sample_frame_indices_for_llm
 from pipeline.evidence import get_evidence_paths
+from agents.routing.router_llm import pick_router_preview_frames, ROUTER_PREVIEW_MAX_FRAMES
+from agents.routing.spatial_skill_router import select_spatial_skill_ids
 
 
 def spatial_agent(state: GraphState) -> GraphState:
@@ -40,7 +42,12 @@ def spatial_agent(state: GraphState) -> GraphState:
     selected_frames = sampled_frames_data
     spatial_config = config.get("spatial", {})
 
-    # 4. Spatial Skills
+    max_router_preview = int(
+        llm_conf.get("skill_router_max_preview_frames", ROUTER_PREVIEW_MAX_FRAMES)
+    )
+    router_preview = pick_router_preview_frames(sampled_frame_inputs, max_router_preview)
+
+    # 4. Spatial Skills (vision LLM picks subset using preview frames + skills/spatial/SKILL.md)
     from skill.spatial.ela import analyze_ela_boundary
     from skill.spatial.patch_anomaly import analyze_patch_inconsistency
     from skill.spatial.boundary_anomaly import analyze_boundary_anomaly
@@ -48,44 +55,61 @@ def spatial_agent(state: GraphState) -> GraphState:
     from skill.spatial.multi_face_collapse_detection import analyze_multi_face_collapse
     from skill.spatial.blur_uniformity import analyze_blur_uniformity
 
+    selected_skill_ids = select_spatial_skill_ids(case, artifacts, config, router_preview)
+    active = set(selected_skill_ids)
+    logger.info(f"{case.case_id} spatial sub-skills active: {selected_skill_ids}")
+
+    ela_results: dict = {}
+    patch_results: dict = {}
+    boundary_results: dict = {}
+    edge_results: dict = {}
+    multi_face_results: dict = {}
+    blur_results: dict = {}
+
     try:
-        ela_results = analyze_ela_boundary(
-            selected_frames,
-            frames_dir,
-            frame_inputs=sampled_frame_inputs,
-            config=spatial_config,
-        )
-        patch_results = analyze_patch_inconsistency(
-            selected_frames,
-            frames_dir,
-            frame_inputs=sampled_frame_inputs,
-            config=spatial_config,
-        )
-        boundary_results = analyze_boundary_anomaly(
-            selected_frames,
-            frames_dir,
-            frame_inputs=sampled_frame_inputs,
-            config=spatial_config,
-        )
-        edge_results = analyze_edge_coherence(
-            selected_frames,
-            frames_dir,
-            frame_inputs=sampled_frame_inputs,
-            config=spatial_config,
-        )
-        multi_face_results = analyze_multi_face_collapse(
-            selected_frames,
-            frames_dir,
-            frame_inputs=sampled_frame_inputs,
-            config=spatial_config,
-        )
-        blur_results = analyze_blur_uniformity(
-            selected_frames,
-            frames_dir,
-            frame_inputs=sampled_frame_inputs,
-            multi_face_results=multi_face_results,
-            config=spatial_config,
-        )
+        if "ela" in active:
+            ela_results = analyze_ela_boundary(
+                selected_frames,
+                frames_dir,
+                frame_inputs=sampled_frame_inputs,
+                config=spatial_config,
+            )
+        if "patch" in active:
+            patch_results = analyze_patch_inconsistency(
+                selected_frames,
+                frames_dir,
+                frame_inputs=sampled_frame_inputs,
+                config=spatial_config,
+            )
+        if "boundary" in active:
+            boundary_results = analyze_boundary_anomaly(
+                selected_frames,
+                frames_dir,
+                frame_inputs=sampled_frame_inputs,
+                config=spatial_config,
+            )
+        if "edge" in active:
+            edge_results = analyze_edge_coherence(
+                selected_frames,
+                frames_dir,
+                frame_inputs=sampled_frame_inputs,
+                config=spatial_config,
+            )
+        if "multi_face" in active:
+            multi_face_results = analyze_multi_face_collapse(
+                selected_frames,
+                frames_dir,
+                frame_inputs=sampled_frame_inputs,
+                config=spatial_config,
+            )
+        if "blur" in active:
+            blur_results = analyze_blur_uniformity(
+                selected_frames,
+                frames_dir,
+                frame_inputs=sampled_frame_inputs,
+                multi_face_results=multi_face_results or None,
+                config=spatial_config,
+            )
     except (ValueError, IOError) as error:
         logger.error(f"Spatial skills analysis failed for {case.case_id}: {error}")
         raise RuntimeError(f"Spatial skills analysis failed: {error}") from error

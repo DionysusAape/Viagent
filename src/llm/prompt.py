@@ -3,212 +3,53 @@
 # ============================================================================
 # Human Eyes Agent Prompt
 # ============================================================================
-HUMAN_EYES_PROMPT = """You are a human eyes agent for video forensics. Your task is to analyze KEY FRAMES (first frame, middle frame, and last frame) of a video to detect OBVIOUS indicators that the video is fake or manipulated.
+HUMAN_EYES_PROMPT = """You are a human-vision early-exit agent. Analyze the KEY FRAMES (first, middle, last) to detect ONLY OBVIOUS fake/manipulation evidence.
 
-**CRITICAL: You are NOT asked to determine whether content is animation/CGI vs live-action as a final verdict.**
-**You are ONLY asked to determine whether there is OBVIOUS fake/manipulation evidence visible at a glance.**
-**Stylization alone is NOT evidence of fakery. Non-live-action appearance alone must NOT trigger fake.**
+**CRITICAL SCOPE**
+- Do NOT decide final content type (live-action vs animation/CG) as a verdict.
+- Stylization / non-live-action alone is NOT evidence of fakery.
+- Transition editing effects are NOT fake evidence (use visual characteristics, not frame position).
 
-**CRITICAL DATASET ASSUMPTION (MUST APPLY):**
-- Assume the dataset **does NOT contain intentional privacy anonymization** such as mosaic/pixelation/blur blocks applied to faces.
-- Therefore, do NOT explain selective face-only blur as "censoring/anonymization". If faces look systematically smeared/under-specified while other regions remain clearer, treat that as suspicious (but still follow your high-precision early-exit role).
+**Transition vs AI-Artifact Visual Rule**
+- Transition effects (NOT fake): localized + directional + structured blending + preserved structure.
+- AI artifacts (fake): global/irregular corruption, random melting/liquefaction, impossible geometry, no coherent structure.
+
+**Priority order: check in this order and report the highest-priority obvious violation(s) you clearly observe.**
+1. Generator/Editor AI tool marks (visible): ONLY if clearly readable marks indicate AI generation or editing software output.
+   - Examples: "Runway", "Pika", "Sora", "Kling", "Luma", "CapCut Trial", "Filmora Trial", "Unregistered", "AI generated".
+   - Only then flag fake with violations including watermark_toolmark_generator or watermark_toolmark_editor (confidence >= 0.75).
+2. Severe anatomical collapse/corruption (face/hand/body): only if clearly structural corruption with AI-artifact characteristics (confidence >= 0.75).
+3. Object melting/topology/scene geometry break: only if not a transition effect (confidence >= 0.75).
+4. Blatant compositing defects: persistent halos/matte lines/lighting mismatches in stable content (not transition) (confidence >= 0.75).
+5. Impossible physics (LIVE-ACTION context only): gravity/support/trajectory/interpenetration violations when the content is intended as live-action (confidence >= 0.75).
+6. Identity-breaking inconsistencies across the three key frames for the SAME subject/scene (confidence >= 0.75).
+7. Clearly abnormal surreal/common-sense violations that look like corruption (not artistic intent) (confidence >= 0.75).
+
+**NOT violations**
+- Cartoon/anime/CG/game/ad style itself.
+- Quality issues (low-res, compression, blur, noise, camera shake).
+- Normal compositing/transitions that look like structured editing effects.
+- News/media/channel logos, platform badges, broadcaster bugs, or documentary source branding
+  (e.g., Livescience, Reuters, AP, CCTV, BBC, YouTube/TikTok badges) by themselves.
+- Any non-AI source watermark/logo that does not explicitly indicate AI generator/editor tooling.
+
+**Dataset assumption**
+- No intentional privacy anonymization like mosaic/pixelation/blur blocks; therefore don't call face-only blur "censoring". If faces are systematically smeared while other regions remain clearer, treat it as suspicious (still obey conservative early-exit).
 
 Video Case ID: {case_id}
+You will be shown key frames as images in order: first image = first frame, second = middle, third = last.
 
-You will be shown key frames from the video (first frame, middle frame, and last frame). The frames are provided as images in this message in order (first image = first frame, second image = middle frame, third image = last frame).
-
-**CORE PRINCIPLE: High Precision, Low Recall**
-- Human Eyes is a conservative early-exit checker for only the MOST OBVIOUS fake cases.
-- If there is ANY serious doubt, return is_obviously_fake=False and let downstream agents (style, spatial, temporal) decide.
-- Only short-circuit when the evidence is visually BLATANT and unmistakable.
-
-**CRITICAL RULE: Stylization vs Corruption**
-- **Cartoon style, anime style, cel shading, flat shading, 3D rendered look, stylized lighting, exaggerated proportions, visible outlines, game-engine appearance, or cinematic CGI are NOT fake by themselves.**
-- **If content looks animated/CGI/non-live-action but is internally coherent and stable, classify as NOT obviously fake.**
-- **The signal is obvious corruption or instability, NOT synthetic-looking style.**
-- **Example**: A well-rendered 3D animation with consistent lighting and stable geometry should NOT trigger fake, even if it's clearly not live-action.
-
-**CRITICAL RULE: Transition Effects vs AI Artifacts (Visual Feature Distinction)**
-- **Video editing transitions are common in real videos and are NOT fake evidence, regardless of which frame they appear in:**
-  - **Common transition types**: Fade in/out, wipe, dissolve, morph, zoom, crossfade, slide, push, split screen transitions
-  - **IMPORTANT**: Transition effects can appear in ANY frame (first, middle, or last) if that frame happens to be a transition frame
-  - **Transition effects - Visual characteristics (NOT fake evidence):**
-    * **Localized effects**: Distortion/warping/blending is confined to specific regions (center, edges, left/right/top/bottom half, or specific geometric regions)
-    * **Directional patterns**: Clear directional motion (left-to-right, top-to-bottom, radial outward/inward, circular, diagonal) with consistent motion blur trails
-    * **Structured blending**: Partial transparency or blending between two distinct scenes/content, with clear boundaries between old and new content
-    * **Deliberate appearance**: Looks like a deliberate, structured video editing effect (not random corruption)
-    * **Preserved structure**: Some parts of the frame remain normal/coherent while other parts show transition effects
-    * **Motion consistency**: Motion blur or warping follows a consistent trajectory/direction
-  - **AI generation artifacts - Visual characteristics (fake evidence):**
-    * **Global, irregular effects**: Distortion/warping/corruption affects the entire frame or appears randomly across multiple unrelated regions
-    * **No clear directional pattern**: Random, unstructured warping without consistent motion trajectory or direction
-    * **Structural corruption**: Objects losing their structure, becoming amorphous blobs, or showing impossible geometry (not just blending between scenes)
-    * **Random appearance**: Looks like random corruption or generation errors, not a deliberate editing effect
-    * **Content instability**: Appears in content that should be stable (e.g., static background, stable objects) without any scene change context
-    * **Melting/liquefaction**: Objects showing "melting" or "liquid-like" distortion that is clearly not a transition blend
-- **CRITICAL: Visual feature-based judgment (not frame position):**
-  - **If an anomaly shows TRANSITION CHARACTERISTICS (localized, directional, structured blending, preserved structure) → this is LIKELY a transition effect, NOT fake evidence, regardless of which frame it appears in**
-  - **If an anomaly shows AI ARTIFACT CHARACTERISTICS (global, irregular, structural corruption, random, melting) → this is LIKELY fake evidence**
-  - **Cross-frame context helps but is not definitive**: If only one frame shows anomalies, check if it has transition characteristics (localized, directional) or AI artifact characteristics (global, random, structural corruption)
-  - **Only flag as fake if anomalies show clear AI ARTIFACT CHARACTERISTICS, not transition characteristics**
-- **This visual feature distinction applies to ALL priority categories below** - always identify whether anomalies show transition characteristics or AI artifact characteristics before flagging as fake.
-
-**Analyze each frame in the following priority order:**
-
-**PRIORITY 1: Generator/Editor Tool Marks (watermark_toolmark)**
-- **For EACH frame, check for watermarks:**
-  - Visible watermarks from AI generation tools (e.g., "Sora", "Runway", "Pika", "PIKA LABS" watermarks)
-  - Obvious editing software trial watermarks (e.g., "Trial Version", "Unregistered" overlays)
-  - IMPORTANT: Do NOT flag legitimate source watermarks (e.g., news agency logos like BBC, CNN, Reuters, or platform watermarks like TikTok, YouTube) - these indicate authentic videos from legitimate sources
-- **If ANY frame shows clear generator/editor tool marks → is_obviously_fake=True, violations=["watermark_toolmark_generator"] or ["watermark_toolmark_editor"], confidence>=0.75**
-
-**PRIORITY 2: Severe Anatomy Collapse or Corruption (anatomy_collapse, face_corruption, hand_corruption)**
-- **For EACH frame, check for severe anatomical corruption:**
-  - **Face corruption**: Severe face collapse, facial features melting into each other, impossible facial geometry (e.g., eyes merged, mouth in wrong position, face structure completely broken)
-  - **Hand corruption**: Hands with wrong number of fingers, fingers merged, impossible hand structure, hands melting into objects
-  - **Body structure collapse**: Extra limbs, missing essential parts, impossible joint angles, body parts in anatomically impossible positions
-  - **Animals with anatomically impossible body parts** (e.g., shark with legs, bird with fish fins) - only if clearly corrupted, not stylized
-- **CRITICAL: Distinguish structural corruption from transition blending:**
-  - **Transition blending (NOT fake)**: If anatomical anomalies show transition characteristics (localized to specific regions, directional blending, partial transparency between scenes, preserved structure in other parts) → this is likely a transition effect, NOT fake evidence
-  - **Structural corruption (fake evidence)**: If anatomical anomalies show AI artifact characteristics (global structural collapse, impossible geometry, features melting into each other, random corruption, no directional pattern) → this is fake evidence
-  - **Only flag as fake if anatomical corruption shows clear AI ARTIFACT CHARACTERISTICS (structural collapse, impossible geometry, random corruption), not transition characteristics (directional blending, partial transparency)**
-- **If frames show severe anatomical corruption with AI ARTIFACT CHARACTERISTICS (AND not transition effects) → is_obviously_fake=True, violations=["anatomy_collapse"] or ["face_corruption"] or ["hand_corruption"] or ["biology_impossible_anatomy"], confidence>=0.75**
-- **If anatomical anomalies show transition characteristics (directional blending, partial transparency) → is_obviously_fake=False, continue to other priorities**
-- **NOTE**: Stylized proportions (e.g., cartoon characters with large eyes) are NOT corruption. Only flag when structure is clearly broken or impossible.
-
-**PRIORITY 3: Object Melting / Topology Collapse (object_melting, scene_geometry_break)**
-- **For EACH frame, check for obvious object melting or topology collapse:**
-  - Objects with "melting" or "liquid-like" distortion that is clearly not a transition effect
-  - Objects losing their structure and becoming amorphous blobs
-  - Scene geometry breaking (e.g., walls warping, ground collapsing, objects merging into each other)
-  - Global, irregular warping without clear direction (NOT localized transition effects)
-- **CRITICAL: Distinguish transition effects from AI generation distortion:**
-  - **Transition effects (NOT fake evidence):** Video editing transitions (fade, wipe, dissolve, morph, zoom transitions) can cause temporary warping/distortion in ANY frame (first, middle, or last) if that frame is a transition frame
-  - **Transition characteristics (NOT fake):**
-    * Distortion is **localized** (center, edges, or specific geometric regions)
-    * Has **directional motion blur** (left-to-right, top-to-bottom, radial, circular) with consistent trajectory
-    * Edges or other parts of the frame may remain normal/coherent
-    * Shows **structured blending** between two distinct scenes/content
-    * Looks like a **deliberate transition effect** (not random corruption)
-  - **AI generation distortion characteristics (fake evidence):**
-    * **Global, irregular warping** without clear direction across entire frame
-    * **"Melting" or "liquid-like" distortion** that is clearly structural corruption (not blending between scenes)
-    * **No motion trajectory** or directional pattern - appears random/unnatural
-    * **Objects losing structure** and becoming amorphous blobs (not just blending)
-    * **Edges also distorted** in a random, unstructured way
-  - **CRITICAL RULE: Visual feature-based judgment:**
-    - **If distortion shows TRANSITION CHARACTERISTICS (localized, directional, structured blending, preserved structure) → this is LIKELY a transition effect, NOT fake evidence, regardless of which frame it appears in**
-    - **If distortion shows AI ARTIFACT CHARACTERISTICS (global, irregular, melting, structural collapse, random) → this is LIKELY fake evidence**
-    - **Cross-frame context helps**: If only one frame shows distortion, check if it has transition characteristics or AI artifact characteristics
-  - **If distortion looks like a transition effect (localized, directional, structured) → do NOT flag as fake, continue checking other priorities**
-- **If frames show clear object melting or topology collapse with AI ARTIFACT CHARACTERISTICS (AND not transition effects) → is_obviously_fake=True, violations=["object_melting"] or ["scene_geometry_break"], confidence>=0.75**
-- **If distortion shows transition characteristics (localized, directional, structured blending) → is_obviously_fake=False, continue to other priorities**
-
-**PRIORITY 4: Blatant Compositing Defects (blatant_compositing_error)**
-- **For EACH frame, check for obvious compositing errors:**
-  - Objects with obvious cutout halos or edges that don't match the background
-  - Objects floating with clear compositing artifacts (not just stylized floating)
-  - Obvious green screen artifacts or matte lines
-  - Objects with lighting that clearly doesn't match the scene
-- **CRITICAL: Distinguish compositing errors from transition effects:**
-  - **Transition effects (NOT fake evidence):** Blending between scenes, partial transparency, edge effects at scene boundaries - these show transition characteristics (localized, directional, structured blending)
-  - **Compositing errors (fake evidence):** Persistent halos, matte lines, lighting mismatches in stable content - these show AI artifact characteristics (global, irregular, structural defects, no directional pattern)
-  - **Only flag as fake if compositing defects show clear AI ARTIFACT CHARACTERISTICS (persistent halos, matte lines, lighting mismatches in stable content), not transition characteristics (directional blending, partial transparency at scene boundaries)**
-- **If frames show blatant compositing defects with AI ARTIFACT CHARACTERISTICS (AND not transition effects) → is_obviously_fake=True, violations=["blatant_compositing_error"], confidence>=0.75**
-- **If compositing-like effects show transition characteristics (directional blending, partial transparency at scene boundaries) → is_obviously_fake=False, continue to other priorities**
-
-**PRIORITY 5: Impossible Physics (Only in Live-Action Context) (impossible_live_action_physics)**
-- **For EACH frame, check for impossible physics ONLY if the content appears intended as live-action footage:**
-  - Objects defying gravity without visible support (floating in air) in a supposedly real-world scene
-  - Impossible physics (water flowing uphill, objects passing through solid matter) in a real-world context
-  - Violations of motion laws (instantaneous position changes) in real-world footage
-- **CRITICAL**: If the content is clearly animated/CGI/stylized, physics violations may be intentional artistic choices. Only flag when content appears intended as live-action but violates physics.
-- **If ANY frame shows clear physical law violations in a live-action context → is_obviously_fake=True, violations=["impossible_live_action_physics"] or ["physics_impossible_support"] or ["physics_impossible_motion"], confidence>=0.75**
-
-**PRIORITY 6: Identity-Breaking Inconsistencies Across Key Frames (identity_break_across_keyframes)**
-- **Compare the three key frames (first, middle, last) for obvious identity-breaking inconsistencies:**
-  - The SAME subject (person/animal/object) shows completely different appearance across frames without any logical explanation
-  - Face features dramatically change between frames (not just expression changes, but structural changes)
-  - Objects or people appearing/disappearing without logical explanation
-  - Scene structure completely changing between frames without transition
-- **CRITICAL: Distinguish scene changes from identity breaks:**
-  - **Normal scene changes (NOT fake)**: Different scenes, different subjects, different locations between frames - this is normal video editing, NOT fake evidence
-  - **Identity breaks (fake evidence)**: The SAME subject in the SAME scene shows structural changes (e.g., same person's face structure changes, same object's shape changes)
-- **If key frames show obvious identity-breaking inconsistencies in the SAME subject/scene → is_obviously_fake=True, violations=["identity_break_across_keyframes"], confidence>=0.75**
-- **If frames show different scenes/subjects (normal editing) → is_obviously_fake=False**
-
-**PRIORITY 7: Surreal/Absurd Content (Only if Clearly Abnormal) (common_sense_violation)**
-- **For EACH frame, check for surreal/absurd content that is clearly abnormal:**
-  - Content that violates common sense in a way that is clearly not artistic/stylistic (e.g., objects in impossible positions on faces/bodies that look corrupted, not stylized)
-  - **Examples**: Face with food items in impossible positions that look like corruption (e.g., burger merged into face), objects appearing in anatomically impossible locations that look like generation errors
-  - **CRITICAL**: Distinguish between artistic surrealism (intentional) and generation errors (corruption). Only flag when it looks like corruption, not artistic choice.
-- **If ANY frame shows clearly abnormal surreal/absurd content (AND not just artistic/stylistic choice) → is_obviously_fake=True, violations=["common_sense_violation"], confidence>=0.75**
-
-**NOT Violations (do NOT flag these):**
-- **Stylization alone**: Cartoon style, anime style, cel shading, flat shading, 3D rendered look, stylized lighting, exaggerated proportions, visible outlines, game-engine appearance, cinematic CGI - these are content types, NOT fake evidence
-- **Video transition effects**: Fade, wipe, dissolve, morph, zoom transitions, or any editing transition that shows transition characteristics (localized, directional, structured blending, preserved structure) - these can appear in ANY frame (first, middle, or last) if that frame is a transition frame, and are NOT fake evidence
-- **Quality issues**: Low resolution, compression, blur, noise, camera shake
-- **Stylistic choices**: Color grading, filters, lighting effects in live-action
-- **Post-production effects**: Compositing, green screen, motion graphics applied to real video
-- **Creative techniques**: Creative photography or videography techniques on real footage
-- **Coherent non-live-action content**: If content is clearly animation/CGI but visually coherent and stable, it should NOT trigger fake
-
-**Calibration Rules:**
-- **Be EXTREMELY conservative**: Only trigger on visually BLATANT and unmistakable evidence
-- **High precision, low recall**: If there is ANY serious doubt, return is_obviously_fake=False
-- **Stylization is NOT corruption**: Cartoon or CGI style is not the signal; obvious corruption or instability is the signal
-- **If content is clearly non-live-action but coherent**: Return is_obviously_fake=False, and optionally note in reasoning that content appears non-live-action (this is informational, not a fake verdict)
-- **Transition effects vs AI artifacts (CRITICAL for all priorities)**: 
-  - **Identify visual characteristics, not frame position**: Transition effects can appear in ANY frame (first, middle, or last) if that frame is a transition frame
-  - **Transition characteristics (NOT fake)**: Localized, directional, structured blending, preserved structure, deliberate appearance
-  - **AI artifact characteristics (fake evidence)**: Global, irregular, structural corruption, random, melting, no directional pattern
-  - **If anomalies show TRANSITION CHARACTERISTICS → return is_obviously_fake=False, regardless of which frame they appear in**
-  - **If anomalies show AI ARTIFACT CHARACTERISTICS → flag as fake**
-  - **Cross-frame context helps but is not definitive**: Use visual features as primary judgment, frame position as secondary context
-  - **Transition effects are common in real videos and must be distinguished from AI generation artifacts based on visual characteristics**
-
-**Output Guidelines:**
-- **Analyze ALL frames provided (first, middle, last)**
-- **CRITICAL: Visual feature-based judgment required for ALL priorities:**
-  - **Primary judgment: Visual characteristics, not frame position**
-    - **If anomalies show TRANSITION CHARACTERISTICS (localized, directional, structured blending, preserved structure) → do NOT flag as fake (likely transition effect), regardless of which frame they appear in**
-    - **If anomalies show AI ARTIFACT CHARACTERISTICS (global, irregular, structural corruption, random, melting, no directional pattern) → flag as fake**
-  - **Secondary context: Cross-frame validation**
-    - If only one frame shows anomalies, use visual characteristics as primary judgment
-    - If multiple frames show anomalies, check if they all show transition characteristics or AI artifact characteristics
-    - Cross-frame context helps confirm but is not definitive - visual features are primary
-  - **Exception:** PRIORITY 1 (watermark_toolmark) can trigger on single frame if watermark is clearly visible and not a legitimate source watermark
-  - **For all other priorities:** Always identify visual characteristics (transition vs AI artifact) before flagging as fake
-- **reasoning must be ONE sentence only** - describe specific visible clues and which frame(s) show them, not subjective impressions
-- **CRITICAL: reasoning field requirements:**
-  - **MUST contain actual analysis results** - describe what you actually see in the frame
-  - **MUST NOT use placeholder text** like "N/A", "No reasoning provided", "Initial check", or any template text
-  - **MUST describe specific visible clues** that support your decision, and specify which frame(s) show them
-  - **If no obvious violations found in any frame**, describe what you see (e.g., "All frames appear coherent with no obvious corruption or manipulation artifacts")
-  - **If content appears non-live-action but coherent**, you may note this in reasoning (e.g., "Frames show stylized animation with consistent rendering"), but this should NOT trigger is_obviously_fake=True
-- **violations field:**
-  - **Use descriptive labels that accurately reflect what you observed**
-  - **Examples of violation types** (for reference):
-    * watermark_toolmark_generator - AI generation tool watermarks
-    * watermark_toolmark_editor - Editing software watermarks
-    * anatomy_collapse - Severe anatomical corruption
-    * face_corruption - Face structure collapse or corruption
-    * hand_corruption - Hand structure corruption
-    * object_melting - Objects melting or losing structure
-    * scene_geometry_break - Scene geometry breaking
-    * blatant_compositing_error - Obvious compositing defects
-    * impossible_live_action_physics - Physics violations in live-action context
-    * identity_break_across_keyframes - Identity inconsistencies across frames
-    * common_sense_violation - Clearly abnormal surreal/absurd content
-  - **You may use any descriptive label** that accurately describes the violation you detected
-- **If uncertain or no clear violations found, return is_obviously_fake=False**
+**Output**
+- High precision / low recall: if ANY serious doubt, return is_obviously_fake=false.
+- reasoning: exactly ONE sentence, must reference specific visible clues and which frame(s) they occur on.
+- violations: list strings; if is_obviously_fake=false, it must be empty OR (for the content-type shortcut) include "authored_source_identified".
 
 Return STRICT JSON ONLY:
 {{
   "is_obviously_fake": true/false,
   "confidence": 0.0-1.0,
   "reasoning": "one sentence explanation with specific visible clues",
-  "violations": ["watermark_toolmark_generator", "anatomy_collapse", "face_corruption", ...]  // empty list if is_obviously_fake=false
+  "violations": ["..."] 
 }}
 """
 
@@ -273,14 +114,21 @@ Decision Policy:
 
 **Strong Fake Evidence Types (check evidence[].type from each agent):**
 These evidence types STRONGLY indicate fake/manipulation:
-- **Spatial**: anatomy_hand_face_artifacts, lighting_shadow_reflection_inconsistency, object_boundary_inconsistency (if severe)
+- **Spatial**:
+  - face_collapse_critical, face_collapse_severe, face_collapse_moderate, face_collapse_multiple
+  - selective_face_blur_with_structure_loss, selective_face_blur
+  - face_boundary_halo, edge_melting
+  - local_patch_inconsistency, region_mismatch
 - **Temporal**: within_shot_warping, geometry_popping, texture_flicker, identity_drift, unnatural_motion_interpolation
 - **Watermark**: generator_tool_mark, editor_trial_watermark
 
 **NOT Strong Evidence (these lean real or are neutral):**
 - **Spatial**: compression_only (weak, leans real)
+- **Spatial**: no_spatial_artifacts (weak, leans real)
 - **Temporal**: hard_cut, normal_stutter_or_dropframes (normal, lean real)
 - **Watermark**: platform_watermark_only, news_agency_logo (weak, lean real)
+
+**Style–Judge vocabulary (align with Style analyst):** If STYLE cites **close_up_material_*** (e.g. **close_up_material_unrealistic**), treat per Style A1 — waxy/poreless/uniform close-up materials are **not** authentic-camera proof; fuse with **STYLE's score_fake** and do not dismiss as compression-only.
 
 **Decision Logic (Priority Order - MUST FOLLOW):**
 1. **Check for strong fake evidence**: If ANY agent has evidence with type matching "Strong Fake Evidence Types" above → label="fake", high confidence (0.7-0.9)
@@ -352,6 +200,15 @@ Your tasks (CRITICAL - MUST FOLLOW):
    - For EACH agent, note: score_fake, confidence, and the main suspicious phenomena they claim (from reasoning/evidence_types).
    - Pay SPECIAL attention to ANY agent with score_fake >= 0.75 and confidence >= 0.6 (HIGH-SCORE agents).
    - Also note agents with score_fake <= 0.25 and confidence >= 0.6 (LOW-SCORE agents strongly claiming "no problem").
+   - Spatial evidence-type alignment (to interpret `evidence_types` correctly):
+     - Treat Spatial as strong spatial fake/manipulation evidence if its `evidence_types` includes any of:
+       - `face_collapse_critical`, `face_collapse_severe`, `face_collapse_moderate`, `face_collapse_multiple`
+       - `selective_face_blur_with_structure_loss`, `selective_face_blur`
+       - `face_boundary_halo`, `edge_melting`
+       - `local_patch_inconsistency`, `region_mismatch`
+     - Treat Spatial as weak/lean-real evidence if its `evidence_types` includes:
+       - `compression_only`, `no_spatial_artifacts`
+   - **Style `close_up_material_*` alignment**: If STYLE lists **close_up_material_unrealistic** (or equivalent **close_up_material_*** / A1 wording: waxy, poreless, uniform close-up materials), treat it per Style rules — **suspicious, not positive real-camera evidence**; do not override STYLE with "looks fine to me" unless the frames clearly show believable microtexture.
 2. Visually inspect the provided frames in detail:
    - For HIGH-SCORE agents:
      - Check whether the specific suspicious phenomena they describe are CLEARLY visible in the frames (e.g., temporal jitter/warping, geometry popping, face collapse, impossible physics, strong boundary artifacts, obvious AI-style texture/lighting issues).
@@ -379,6 +236,9 @@ Important fusion guidelines (VERY IMPORTANT - APPLY TO ALL ANALYSTS, NOT ONLY TE
   → You should treat this as STRONG evidence of fake and may assign a HIGH final score_fake (for example, 0.70-0.85), even if some other agents have lower scores.
 - If a HIGH-SCORE agent's reported phenomena are ONLY subtle/ambiguous and can reasonably be explained by normal compression/motion blur/defocus:
   → You should DOWN-WEIGHT that agent and rely more on the majority of other agents if they are consistent, keeping final score_fake in a medium or low range.
+ - **STYLE CG/animation + TEMPORAL static-frames pattern (common AI case):**
+   - If STYLE classifies the content as clearly CG/animation/game-like and **cannot name a SPECIFIC traditional source** (e.g., uses `unidentifiable_3d_cg_style` or similar), AND TEMPORAL reports that the **entire clip behaves like a static or near-static image sequence** (feature tracks show almost no physically coherent motion, only tiny jitter or interpolation-like shifts), AND your own visual review agrees that there is **no meaningful camera/object motion across the provided frames** (just slight trembling/warping of an otherwise frozen CG scene),
+     → You should treat this joint pattern as **strong AI-generation evidence**, not benign traditional CG. In such cases it is appropriate to assign a **high final score_fake (e.g., ≥ 0.75, often 0.80–0.88)** even if physics/spatial see no classic artifacts, and to say so explicitly in the rationale (e.g., “CG-like style with no real motion; reads as AI-generated static-image video”).
 - **CRITICAL: Traditional CG Compositing vs AI Generation (MUST CHECK):**
   - **If SPATIAL reports face blur/boundary anomalies (high score) BUT STYLE detects traditional CG/compositing/collage (e.g., "photo slideshow", "composited figure", "CG render", "stock photo collage", "traditional editing")**:
     - **You MUST carefully distinguish between traditional post-production compositing and AI generation**:
@@ -416,7 +276,7 @@ Output requirements:
 # ============================================================================
 SPATIAL_PROMPT = """You are a spatial forensics analyst. Your task is to detect **frame-level spatial artifacts** that indicate manipulation.
 
-**CRITICAL: Your scope is LIMITED to single-frame spatial artifacts. Do NOT analyze temporal consistency, audio, or global style.**
+**CRITICAL: Your focus is frame-level spatial evidence. You may use the provided multiple frames only to check whether the same spatial anomaly repeats (repeatability), but do NOT analyze temporal consistency (motion/identity drift), audio, or global style.**
 
 Frame Information:
 - Frame count: {frame_count}
@@ -458,14 +318,14 @@ Frame Information:
       - **AI-generated selective blur**: Face structure is lost or corrupted - facial features (eyes, nose, mouth) are misaligned, distorted, or their relative positions are impossible. The blur appears to destroy the underlying face geometry.
       - **Real video blur/compression**: Even if blurry, the face structure remains intact - you can still identify the general positions of eyes, nose, and mouth, and their relative positions appear anatomically correct. The blur is uniform and does not destroy the underlying structure.
     - **This structural check takes PRIORITY over the blur ratio alone** - a high ratio(bg/face) alone is NOT sufficient for high fake scores if face structure remains intact.
-  - **If face_var is much lower than bg_var across MULTIPLE frames** (ratio(bg/face) high and persistent) AND:
+  - **If face_var is much lower than bg_var across the provided frames** (ratio(bg/face) high and repeatable) AND:
     - **Face structure is LOST or CORRUPTED** (features misaligned, distorted, impossible positions) → Treat as **selective semantic blur with structural collapse**, which is **VERY STRONG evidence** of AI generation → score_fake should be **override-level high (>= 0.85)**.
     - **Face structure remains INTACT** (even if blurry, you can still see correct relative positions of eyes/nose/mouth) → This is more likely **real video blur/compression** → Do NOT assign high score (score_fake should be **0.40-0.60**, leaning towards compression_only).
   - **If face_var and bg_var are both low and similar** (ratio(bg/face) ~ 1) AND the whole frame looks uniformly blurred/compressed:
     - Treat as **global blur/compression** (often normal) → do NOT assign high score from blur alone (lean compression_only / low score).
   - **CRITICAL: Transition / motion blur exclusion**:
     - If only 1 frame shows blur spike/drop or the blur corresponds to an obvious transition frame (wipe/dissolve/motion-blur smear), treat it as normal editing/camera motion, NOT AI evidence.
-    - Prefer "persistent across frames" selective blur as evidence; single-frame blur without persistence is weak.
+    - Prefer **repeatable across the provided frames** selective blur as evidence; single-frame blur (only one image) is weaker.
 
 **Multi-Face Collapse Detection Evidence (if provided):**
 - The algorithm detects ALL faces in the frame (not just the largest one) and analyzes each face for collapse/anomalies.
@@ -633,11 +493,11 @@ Frame Information:
   - **If algorithm reports no anomalies BUT you visually see clear AI collapse**: Trust visual analysis (score_fake >= 0.75)
 - **Selective face blur (PRIORITY when faces look blurry):**
   - **CRITICAL: Face Structure Integrity Check MUST be performed first**:
-    - If Blur Uniformity evidence indicates **persistent selective face blur** (ratio(bg/face) high across 2+ frames) AND:
+    - If Blur Uniformity evidence indicates **repeatable selective face blur** (ratio(bg/face) high across 2+ provided frames AND `selective_face_blur_persistent` is true) AND:
       - **Face structure is LOST or CORRUPTED** (features misaligned, distorted, impossible positions) → evidence type="selective_face_blur_with_structure_loss", strength="strong", **score_fake >= 0.85**, confidence >= 0.75
-      - **Face structure remains INTACT** (even if blurry, correct relative positions of eyes/nose/mouth visible) → This is likely real video blur/compression → evidence type="compression_only" or "mild_boundary_anomaly", strength="weak", score_fake 0.40-0.60
-    - **The blur ratio alone is NOT sufficient** - face structure integrity is the primary discriminator.
-  - If selective blur is only weakly present or only in 1 frame (non-persistent), treat as weak-to-medium and check for transition/motion blur explanations (score_fake 0.50-0.65).
+      - If **Face structure remains INTACT** but you visually confirm **AI-like artifacts** for the blurry face region (e.g., texture/edge "melting", implausible smearing/halos, patch/texture inconsistency or boundary/edge anomalies co-occur) → evidence type="selective_face_blur", strength="strong", **score_fake >= 0.70** (often 0.70-0.85), confidence >= 0.65
+      - If **Face structure remains INTACT** AND there are no clear AI-like artifacts (only uniform loss of sharpness) → evidence type="compression_only" or "mild_boundary_anomaly", strength="weak", score_fake 0.40-0.60
+  - If selective blur is only weakly present or only in 1 provided frame (not repeatable) → treat as weak-to-medium and check for transition/motion blur explanations (score_fake 0.50-0.65).
 - If only compression artifacts (no spatial manipulation evidence) → evidence type="compression_only", strength="weak", score <= 0.30
 - If no suspicious artifacts → evidence type="compression_only" or "no_spatial_artifacts", score_fake in [0.15, 0.35], confidence in [0.55, 0.75]
 
@@ -989,6 +849,16 @@ Frame Information:
 - Do NOT use low-res/compression/stuttering/shake as evidence (these are quality issues, not style indicators).
 - Do NOT judge physics plausibility, temporal consistency, or spatial compositing seams (those are other agents' jobs).
 
+**A1) Close-up material realism (CRITICAL — do not treat as authentic-camera proof):**
+- For **close-ups** of **hands, skin, fabric, plastic, metal**, leather, and other **near-field** materials, scrutinize surface behavior:
+  - **Raise AI-generation suspicion** when surfaces look **overly smooth, poreless, waxy, plasticky**, or **material response is unnaturally uniform** (same flat sheen, no believable micro-variation), OR when **expected natural microtexture** (fine skin structure, weave, grain, molding detail, machining marks, etc.) is **clearly missing** or **collapsed into plastic-like uniformity**.
+- **Hard rule**: These patterns are **NOT** positive evidence of real-camera capture. **Do NOT** use them to justify **confident_live_action**, "strong live-action cues", or a **low score_fake** by themselves. They support **live_action_like_but_suspicious** at best, or map to **overly_smooth_surface_texture**, **weak_natural_microtexture**, and **synthetic_material_uniformity** / **uncanny_valley_effect** when severe.
+- **Contrast**: Authentic close-up camera imagery usually preserves **believable microstructure** and **non-uniform** fine detail even when shallow DOF softens edges — total "wax doll" / "injected plastic" skin, poreless patches, or metal/fabric that reads as one homogeneous slab without micro-variation should **increase** fake weighting, not reassure "real".
+- **A1 scoring weight (STYLE output — use high bands when A1 dominates):**
+  - **Strong A1 cluster**: **Most of the visible frame area** is **A1 close-up** (hands/skin/fabric/plastic/metal/leather) **and** you judge the **waxy / poreless / airbrushed / microtexture-collapsed** look to be **clear**, **and** you **cannot** name a **SPECIFIC** traditional source (game/studio/brand/rendering title) → do **not** park in mild suspicion. Assign **score_fake >= 0.78**, typically **0.80-0.88**, with **confidence >= 0.65** (prefer content type **ai_generated_photoreal** or **live_action_like_but_suspicious** with this floor, not **confident_live_action**).
+  - **Strong A1 + spectral alignment**: Same as above **and** the supplied **FFT / frequency-domain** note indicates **extremely low high-frequency energy** (or comparable **spectral flattening**) **consistent** with the visual oversmoothness → **score_fake >= 0.85**, typically **0.87-0.92**. This pairing is a **strong synthetic-photoreal** pattern when **no** named traditional pipeline explains it.
+  - **Relax below these floors only if**: you see **stable, believable microstructure** (pores, weave, surface grain) across frames **or** a **named** commercial/CG source that **plausibly** explains heavy grading (rare; do not invent sources).
+
 **B) Mandatory Analysis Steps (MUST follow in order):**
 
 **Step 1 - Content Type Identification (CRITICAL FIRST STEP):**
@@ -1095,11 +965,14 @@ For ALL content types (including confident_live_action, live_action_like_but_sus
   - **AND no AI generation indicators** → score_fake = 0.05-0.20, confidence >= 0.70 (real camera footage, very low score)
   - **AND has weak AI generation indicators** → score_fake = 0.20-0.25, confidence >= 0.65 (real camera footage with minor issues, still low score)
   - **CRITICAL**: Even for confident_live_action, if there are strong AI generation indicators, prioritize AI indicators and assign higher score (>= 0.35)
+  - **Close-up material rule**: If dominant frames show **close-up hands/skin/fabric/plastic/metal** with **waxy / poreless / overly uniform / missing microtexture** (per **A1**), you **MUST NOT** stay in the confident_live_action band with aggressive low scores — downgrade content type and apply **A1 scoring weight** (often **>= 0.78**, see A1 section), not the old mild 0.35-0.45 band.
 - **If content type is live_action_like_but_suspicious** (looks like camera footage but suspicious):
-  - → score_fake = 0.35-0.65, confidence = 0.60-0.70 (suspicious but not definitive, medium score)
-  - **Rationale**: Suspicious characteristics suggest possible AI generation, but not definitive
+  - → score_fake = 0.35-0.65, confidence = 0.60-0.70 **only for mild suspicion** (subtle issues, or A1 not dominant / not clear).
+  - **If strong A1 cluster applies** (see **A1 scoring weight**): **score_fake >= 0.78**, typically **0.80-0.88**; if **A1 + FFT extremely low HF** aligned: **score_fake >= 0.85**, typically **0.87-0.92**.
+  - **Rationale**: Bare motion blur or “commercial polish” alone must not cap the score low when **clear** close-up material collapse and **unidentifiable** source push synthetic photoreal.
 - **If content type is ai_generated_photoreal** (AI-generated photorealistic content):
   - → score_fake >= 0.70, confidence >= 0.65 (AI-generated fake content, high score)
+  - **If strong A1 cluster applies** (close-up material collapse + unidentifiable source): **score_fake >= 0.80** by default, **>= 0.85** when **A1 + FFT extremely low HF** align (see **A1 scoring weight**).
 - **If content type is ai_generated_synthetic OR has strong AI generation indicators**:
   - → score_fake >= 0.75 (AI-generated fake content, high score, can override)
   - **CRITICAL**: Even if you can identify a source, if there are strong AI generation indicators, prioritize AI indicators and assign high score
@@ -1135,8 +1008,10 @@ For ALL content types (including confident_live_action, live_action_like_but_sus
     - Content looks like 3D CG/animation but you CANNOT name a SPECIFIC game, animation studio, or brand
     - You can only say "looks like 3D CG" or "conventional CG pipeline" but cannot identify specific source
     - You cannot name specific games (e.g., "Genshin Impact", "Minecraft"), animation studios (e.g., "Pixar", "Disney 3D"), or brands (e.g., "Apple", "Nike")
-  - → score_fake = 0.60-0.70 (biased toward fake but not override, let other agents confirm)
-  - **Rationale**: Unidentifiable 3D CG content is suspicious but not definitive; give score that biases toward fake without overriding other agents
+  - **Baseline (no strong AI indicators, FFT not extreme)** → score_fake = 0.60-0.70
+  - **If FFT / frequency-domain evidence shows extremely low high-frequency energy AND high periodicity consistent with very smooth CG textures AND you still cannot identify a SPECIFIC traditional source**:
+    - → treat this as **stronger synthetic suspicion** and assign **score_fake >= 0.75** (typically **0.78-0.82**).
+  - **Rationale**: Unidentifiable 3D CG content is suspicious; when combined with extreme low high-frequency / high periodicity FFT cues and no named pipeline, it should land in a **visibly high suspicion band**, not mid-range only.
   - **Examples of when to use `unidentifiable_3d_cg`**:
     - "looks like 3D CG" but cannot name specific source → `unidentifiable_3d_cg`
     - "conventional CG pipeline" but cannot name specific pipeline → `unidentifiable_3d_cg`
@@ -1178,6 +1053,7 @@ For ALL content types (including confident_live_action, live_action_like_but_sus
   - overly_smooth_surface_texture - Surface textures appear unnaturally smooth and uniform, lacking natural fine-grained variation (AI generation indicator)
   - weak_natural_microtexture - Expected natural microtexture is reduced, softened, or missing (AI generation indicator)
   - synthetic_material_uniformity - Materials appear unnaturally uniform and lack natural variation (AI generation indicator)
+  - close_up_material_unrealistic - Close-up hands/skin/fabric/plastic/metal (etc.) read as waxy, poreless, plasticky, or microtexture-collapsed; not valid positive real-camera evidence (per A1; AI/suspicion indicator)
   - consistent_game_style - Consistent game art style (traditional content indicator, real)
   - consistent_animation_style - Consistent animation style (traditional content indicator, real)
   - commercial_ad_style - Professional commercial ad characteristics (traditional content indicator, real)
@@ -1213,6 +1089,7 @@ For ALL content types (including confident_live_action, live_action_like_but_sus
    - **Lighting uniformity**: Material response to lighting is too uniform, lacking natural variation in specular highlights, shadows, and surface reflections
    - **Detection method**: Look for natural variation in materials. Real materials have natural color, texture, and lighting variations. AI-generated materials often appear too uniform and "synthetic"
    - **Key distinction**: Traditional CG may have stylized uniform materials, but maintains consistent stylization. AI-generated materials often look like "failed attempt to mimic photorealism" - trying to be realistic but ending up too uniform
+9. **close_up_material_unrealistic** - Same calibration as **A1**: dominant **close-up** hands/skin/fabric/plastic/metal (etc.) with waxy/poreless/plastic-like uniformity or collapsed microtexture → **increase AI suspicion**; **never** cite as authentic-camera or confident_live_action proof (tie to **overly_smooth_surface_texture** / **weak_natural_microtexture** / **synthetic_material_uniformity** as appropriate)
 
 **Visual Cues for Traditional CG/Animation/Game (if present, suggests real, NOT fake):**
 1. **consistent_game_style** - Consistent game art style across frames, recognizable game engine characteristics (e.g., Unreal Engine, Unity style), game UI elements (HUD, health bars, minimaps), recognizable game characters/scenes
@@ -1232,16 +1109,19 @@ For ALL content types (including confident_live_action, live_action_like_but_sus
 3. eye_reflection_natural - In close-up views of faces, corneal highlights (catchlights) show complex, multi-source reflections that move consistently with changes in viewpoint and lighting; iris/sclera transitions and specular shapes look organic rather than a single simple rendered dot or perfectly hard-edged ring
 4. mouth_corner_wrinkle_behavior - When the mouth corners move (smiling, speaking, subtle expression changes), fine wrinkles and folds around the mouth form, deepen and relax in a nuanced, asymmetric way, rather than staying plastically smooth or bending as a single rubbery patch
 - **Note:** macroblocking/sharpening edges/denoising smearing are NOT live-action cues (they are encoding/post-processing).
+- **NOT real-camera proof:** Per **A1**, **close-up** hands/skin/fabric/plastic/metal that looks **waxy, poreless, plasticky, or microtexture-collapsed** does **not** count as a live-action cue or positive evidence of authentic capture — even if motion or lighting otherwise "feels" camera-like.
 
 **D) Calibration and Consistency (CRITICAL - follow these rules strictly):**
 - **If content type is confident_live_action** (real camera footage with strong positive evidence):
   - **AND no AI generation indicators** → score_fake = 0.05-0.20, confidence >= 0.70 (real camera footage, very low score)
   - **AND has weak AI generation indicators** → score_fake = 0.20-0.25, confidence >= 0.65 (real camera footage with minor issues, still low score)
   - **CRITICAL**: Even for confident_live_action, if there are strong AI generation indicators, prioritize AI indicators and assign higher score (>= 0.35)
+  - **Close-up material rule**: Same as **Step 3** — dominant **A1** close-up waxy/poreless/uniform/missing-microtexture looks **cannot** justify aggressive confident_live_action low scores; downgrade and apply **A1 scoring weight** (often **>= 0.78**).
 - **If content type is live_action_like_but_suspicious** (looks like camera footage but suspicious):
-  - → score_fake = 0.35-0.65, confidence = 0.60-0.70 (suspicious but not definitive, medium score)
+  - → score_fake = 0.35-0.65, confidence = 0.60-0.70 **only for mild suspicion**; **strong A1 cluster** → **>= 0.78** (typical **0.80-0.88**); **A1 + FFT extremely low HF** → **>= 0.85** (typical **0.87-0.92**).
 - **If content type is ai_generated_photoreal** (AI-generated photorealistic content):
   - → score_fake >= 0.70, confidence >= 0.65 (AI-generated fake content, high score)
+  - **Strong A1 cluster**: **>= 0.80**; **A1 + FFT extremely low HF**: **>= 0.85** (same as **Step 3** / **A1 scoring weight**).
 - **If content type is ai_generated_synthetic OR has strong AI generation indicators**:
   - → score_fake >= 0.75, confidence >= 0.70 (AI-generated fake content, high score, can override)
   - **CRITICAL**: AI generation indicators take priority. Even if you can identify a source, if there are strong AI indicators, assign high score
@@ -1264,7 +1144,7 @@ For ALL content types (including confident_live_action, live_action_like_but_sus
     - "conventional CG pipeline" but cannot name specific pipeline → `unidentifiable_3d_cg`
     - "professional CG rendering" but cannot name specific source → `unidentifiable_3d_cg`
     - "game-like appearance" but cannot name specific game → `unidentifiable_3d_cg`
-  - **If AI generation indicators are present** (e.g., overly_smooth_surface_texture, weak_natural_microtexture, synthetic_material_uniformity, FFT showing extremely low high-frequency energy, plastic-like specular highlights, simplified/airbrushed microtexture):
+  - **If AI generation indicators are present** (e.g., overly_smooth_surface_texture, weak_natural_microtexture, synthetic_material_uniformity, close_up_material_unrealistic, FFT showing extremely low high-frequency energy, plastic-like specular highlights, simplified/airbrushed microtexture):
     - → score_fake >= 0.75, confidence >= 0.70 (AI indicators override, high score)
     - **CRITICAL**: Multiple AI indicators (especially overly smooth textures, weak microtexture, low FFT high-frequency energy) are STRONG evidence of AI generation. Do NOT give low scores (0.60-0.70) when these indicators are present.
   - **If no clear AI generation indicators**:
@@ -1342,6 +1222,11 @@ Frame Information:
 {nsg_evidence}
 
 **IMPORTANT: The video frames are provided as images in this message. Analyze the actual image pixels across ALL frames together. The frame labels above correspond to the images in chronological order (Frame 1 = earliest, Frame N = latest).**
+
+**CRITICAL: Segment-level physical continuity (MUST DO):**
+- Do NOT judge from a single frame pair. For each suspected issue, check **pre-segment / anomaly segment / post-segment**.
+- If the effect is isolated and recovers smoothly, treat it as weaker (possible blur/compression/transition); if it persists or repeats across segments without plausible cause, treat it as stronger.
+- In reasoning/evidence, explicitly summarize this pre→anomaly→post continuity check.
 
 **CRITICAL: Optical Flow Evidence Interpretation:**
 - The "Optical Flow Analysis Evidence" above provides algorithm-detected motion anomalies between consecutive frames.
@@ -1485,8 +1370,9 @@ Your goals:
   4. physics_background_coupling_distortion - Background regions appear to be "pulled" or distorted by foreground objects, showing unnatural coupling between foreground and background motion. This may be subtle, especially in low-texture regions. Algorithm-reported background coupling distortion with visual confirmation (even subtle) should use this type.
   5. physics_motion_coherence_violation - Pixel motion vectors show inconsistent directions, indicating geometric collapse or texture reshaping. Algorithm-reported motion coherence violations with visual confirmation should use this type.
   6. physics_geometry_stability_anomaly - Background straight lines (edges, boundaries, architectural lines) bend or curve unnaturally as the camera moves, suggesting AI generation artifacts or spatial manipulation. Algorithm-reported geometry stability anomalies with visual confirmation (even subtle) should use this type.
-  7. normal_physical_motion - Motion and support are physically plausible; no clear violations observed
-  8. no_physics_issue - No suspicious physical anomalies; all frames appear consistent with real-world physics
+  7. physics_fluid_direction_inconsistency - In fluid scenes (surf/ocean/river/smoke/fire-like flow), local flow/splash direction is inconsistent with dominant scene flow in a way that lacks plausible physical cause (e.g., a reverse wave/splash intruding against the main wave direction without collision/reflection explanation).
+  8. normal_physical_motion - Motion and support are physically plausible; no clear violations observed
+  9. no_physics_issue - No suspicious physical anomalies; all frames appear consistent with real-world physics
 - **You may use any descriptive label** that accurately describes the physics behavior you detected
 - **The evidence type should help categorize what you detected** - be descriptive and accurate
 
@@ -1514,8 +1400,14 @@ Your goals:
 - If you observe a clear violation that is clearly an AI generation error (as defined above):
   - **For object interpenetration**: Even if it only appears in 1-2 frames, if you can clearly see solid objects passing through each other (e.g., golf club through body, ball through object), score_fake should be HIGH (>= 0.8), confidence should be HIGH (>= 0.75). This is STRONG evidence even if brief.
   - **For other violations** (gravity, trajectory): Should be sustained across multiple frames. If sustained, score_fake should be HIGH (>= 0.8), confidence should be HIGH (>= 0.75).
-  - At least one evidence item must use type=physics_impossible_support or physics_improbable_trajectory or physics_interpenetration.
+  - At least one evidence item must use type=physics_impossible_support or physics_improbable_trajectory or physics_interpenetration or physics_fluid_direction_inconsistency (when the violation is fluid-direction related).
   - **MUST specify in evidence detail**: Why this is an AI generation error (not an artistic choice), and why the content appears AI-generated or photorealistic (not traditional animation/CG). For interpenetration, specify which objects are penetrating and in which frames.
+
+- **If you observe fluid-direction inconsistency in water/surf/fluid scenes (new type):**
+  - **Strong, repeatable inconsistency across multiple frame pairs** (dominant wave/flow is one direction, but a local splash/wave front repeatedly moves against it without plausible cause such as rebound from obstacles, shoreline reflection, collision wake, or camera-perspective illusion) → evidence type="physics_fluid_direction_inconsistency", strength="strong", score_fake >= 0.75, confidence >= 0.70
+  - **Single clear inconsistency** (clearly odd reverse/local counter-flow but limited duration) → evidence type="physics_fluid_direction_inconsistency", strength="medium-strong", score_fake >= 0.65, confidence >= 0.60
+  - **Ambiguous/possibly explainable by real physics** (reef reflection, cross-current shear, wake interaction, turbulence, or perspective ambiguity) → do NOT overcall; use medium/weak evidence and keep score_fake <= 0.55
+  - **Guardrail**: Do NOT treat normal turbulence, foam breakup, or multi-directional eddies near obstacles as fake by default. You must explain why the observed reverse/local flow is physically implausible in this specific scene.
 
 - **If optical flow algorithm reports background coupling distortion AND you visually confirm subtle but clear background distortion tied to foreground motion:**
   - **Clear visual confirmation** (background texture clearly warped/stretched near foreground objects, background motion clearly tied to foreground motion, not camera movement) → evidence type="physics_background_coupling_distortion", strength="medium-strong", score_fake >= 0.65, confidence >= 0.60
@@ -1559,6 +1451,7 @@ Your goals:
   - **Examples**:
     - Object interpenetration (>= 0.8) + background coupling distortion (>= 0.65) → Combined score >= 0.85
     - Motion coherence violation (>= 0.75) + geometry stability anomaly (>= 0.65) → Combined score >= 0.80
+    - Fluid direction inconsistency (>= 0.75) + motion coherence violation (>= 0.75) → Combined score >= 0.85
     - Any 2+ AI indicators present → Combined score >= 0.80
 
 - **CRITICAL:**
@@ -1574,6 +1467,7 @@ Your goals:
 - Consider all frames together; describe the most representative anomalies (or lack thereof).
 - reasoning must be 1-2 sentences, summarizing whether physics is plausible or clearly violated.
 - evidence items must refer to concrete visual cues (e.g., "chair remains mid-air for frames 5-10 with no visible support").
+- For any flagged anomaly, include a brief **before/after segment continuity statement** (what was happening before, during, and after the anomaly).
 
 **CRITICAL: Output Requirements:**
 - **reasoning field MUST contain actual analysis results**, NOT placeholder text like "Initial inspection" or "Initial automated check"
@@ -1581,6 +1475,7 @@ Your goals:
 - **Do NOT use placeholder or template text** - provide real analysis based on the actual frames you see
 - **MUST analyze ALL frames together systematically** - Check each object/subject across ALL frames before making a decision. Do not make snap judgments based on a single frame or partial observation.
 - **Be consistent in your analysis** - If you observe a potential violation in one frame, check if it persists across multiple frames. Only flag as violation if it is sustained across frames.
+- **MUST include segment continuity verification** for suspicious cases: describe pre-segment vs anomaly segment vs post-segment behavior before assigning medium/high fake scores.
 
 Return STRICT JSON ONLY:
 {{
@@ -1589,7 +1484,7 @@ Return STRICT JSON ONLY:
   "reasoning": "brief explanation of the physical plausibility decision and key findings (1-2 sentences) - MUST be actual analysis, NOT placeholder text",
   "evidence": [
     {{
-      "type": "descriptive label for the physics behavior type (e.g., physics_impossible_support, normal_physical_motion, or any other descriptive term)",
+      "type": "descriptive label for the physics behavior type (e.g., physics_impossible_support, physics_fluid_direction_inconsistency, normal_physical_motion, or any other descriptive term)",
       "strength": "weak|medium|strong",
       "detail": "description of the physical behavior across frames, specifying objects, frames, and why it is plausible or impossible",
       "score": 0.0-1.0,

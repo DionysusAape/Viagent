@@ -70,6 +70,18 @@ class AnalystLLMOutput(BaseModel):
     )
 
 
+class SubskillRouterOutput(BaseModel):
+    """LLM output for selecting which CV sub-skills to run for an analyst."""
+
+    selected_skill_ids: List[str] = Field(
+        description="Subset of analyst sub-skill ids to enable for this video (exact id strings)",
+    )
+    rationale: str = Field(
+        default="",
+        description="Short justification for which skills were included or omitted",
+    )
+
+
 class JudgeLLMOutput(BaseModel):
     """Pydantic model for judge agent LLM output"""
     label: str = Field(

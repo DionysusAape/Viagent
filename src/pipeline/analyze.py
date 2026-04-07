@@ -6,6 +6,7 @@ from graph.workflow import AgentWorkflow
 from graph.schema import VideoCase
 from util.config import load_config
 from util.paths import DATA_ROOT, get_data_root
+from util.media_extensions import iter_video_files_under
 from .evidence import make_video_id, load_evidence
 
 
@@ -111,7 +112,7 @@ def list_videos(
         return {"count": 0, "items": []}
     
     count = 0
-    for video_path in sorted(category_dir.rglob("*.mp4")):
+    for video_path in iter_video_files_under(category_dir):
         if count < offset:
             count += 1
             continue
@@ -144,15 +145,13 @@ def list_videos(
 def _list_all_videos_generic(limit: int, offset: int) -> Dict[str, Any]:
     """
     Recursively list all videos in data root (for arbitrary dataset structures).
-    
-    This function scans the entire data root directory recursively to find all .mp4 files,
-    regardless of directory structure.
+
+    Includes common video extensions (e.g. .mp4, .gif, .mov); see util.media_extensions.
     """
     items = []
     count = 0
-    
-    # Recursively find all .mp4 files
-    for video_path in sorted(DATA_ROOT.rglob("*.mp4")):
+
+    for video_path in iter_video_files_under(DATA_ROOT):
         if count < offset:
             count += 1
             continue

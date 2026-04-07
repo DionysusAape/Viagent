@@ -5,7 +5,6 @@
 用法（在 src 目录下）：
     python statistics.py                    # 统计所有结果
     python statistics.py --config config.yaml    # 统计指定配置文件的结果
-    python statistics.py --config config1.yaml   # 统计 config1.yaml 的结果
     python statistics.py --list-experiments      # 列出所有试验
 """
 import sqlite3
@@ -20,12 +19,6 @@ from pipeline.evidence import parse_video_id
 
 
 def extract_config_signature(config_dict: Dict) -> Dict[str, Any]:
-    """
-    从配置字典中提取关键特征，用于匹配试验
-
-    Returns:
-        包含关键配置特征的字典
-    """
     signature = {}
 
     # LLM 配置

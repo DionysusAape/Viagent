@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Dict, Any, List
 from util.paths import EVID_DIR, get_data_root
+from util.media_extensions import is_video_suffix
 from apis.video_io.probe import get_video_metadata, ensure_ffmpeg
 from apis.video_io.ffmpeg import extract_frames, extract_all_frames, uniform_timestamps
 from util.config import get_frame_ext, get_frame_quality, get_lock_wait_sec, get_lock_poll_sec, get_frame_mime
@@ -54,7 +55,7 @@ def resolve_video_from_id(video_id: str) -> tuple[Path, Path]:
     rel = parse_video_id(video_id)
     data_root = get_data_root()
     p = data_root / rel
-    if not p.exists() or p.suffix.lower() != ".mp4":
+    if not p.exists() or not is_video_suffix(p.suffix):
         raise FileNotFoundError(video_id)
     return p, rel
 

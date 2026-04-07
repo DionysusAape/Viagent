@@ -5,9 +5,9 @@ from llm.inference import call_llm
 from llm.prompt import STYLE_PROMPT
 from util.logger import logger
 from util.frame_sampling import sample_frames_for_llm
-
-# FFT 分析功能（必需依赖：numpy 和 Pillow）
 from skill.style.fft_analysis import analyze_frames_fft_batch, format_fft_features_for_prompt
+from agents.routing.router_llm import pick_router_preview_frames, ROUTER_PREVIEW_MAX_FRAMES
+from agents.routing.style_skill_router import select_style_skill_ids
 
 
 def style_agent(state: GraphState) -> GraphState:
@@ -21,37 +21,43 @@ def style_agent(state: GraphState) -> GraphState:
 
     frame_inputs = artifacts.get("frame_inputs")
 
-    # 先过滤掉 None
     all_valid_frames = [frame for frame in frame_inputs if frame is not None]
 
-    # 根据当前 LLM 配置的 max_images（如果未配置，则默认为 50）
     llm_conf = config.get("llm", {})
     max_images = int(llm_conf.get("max_images") or 50)
     sampled_frames = sample_frames_for_llm(all_valid_frames, max_images)
 
-    # Prepare frame information（使用实际发送给 LLM 的帧数）
     frame_count = len(sampled_frames)
 
-    # Format frame labels for prompt
     frame_labels = [f"Frame {index + 1}" for index in range(frame_count)]
     frame_labels_str = ", ".join(frame_labels)
 
-    # 进行 FFT 分析（必需依赖：numpy 和 Pillow）
-    try:
-        fft_features_list = analyze_frames_fft_batch(sampled_frames)
-        fft_description = format_fft_features_for_prompt(fft_features_list, frame_labels)
-    except (ValueError, IOError) as error:
-        logger.error(f"FFT analysis failed for {case.case_id}: {error}")
-        raise RuntimeError(f"FFT analysis failed: {error}") from error
+    max_router_preview = int(
+        llm_conf.get("skill_router_max_preview_frames", ROUTER_PREVIEW_MAX_FRAMES)
+    )
+    router_preview = pick_router_preview_frames(sampled_frames, max_router_preview)
+    selected_skill_ids = select_style_skill_ids(case, artifacts, config, router_preview)
+    active = set(selected_skill_ids)
+    logger.info(f"{case.case_id} style sub-skills active: {selected_skill_ids}")
 
-    # Format prompt with frame information and FFT features
+    fft_description = (
+        "**FFT / frequency-domain style cues:**\n\n"
+        "FFT analysis was not run for this case (skill routing).\n\n"
+    )
+    if "fft" in active:
+        try:
+            fft_features_list = analyze_frames_fft_batch(sampled_frames)
+            fft_description = format_fft_features_for_prompt(fft_features_list, frame_labels)
+        except (ValueError, IOError) as error:
+            logger.error(f"FFT analysis failed for {case.case_id}: {error}")
+            raise RuntimeError(f"FFT analysis failed: {error}") from error
+
     prompt = STYLE_PROMPT.format(
         frame_count=frame_count,
         frame_labels=frame_labels_str,
         fft_analysis=fft_description,
     )
 
-    # Call LLM with structured output (with frame images)
     llm_response = call_llm(
         prompt=prompt,
         config=config["llm"],
@@ -59,7 +65,6 @@ def style_agent(state: GraphState) -> GraphState:
         images=sampled_frames,
     )
 
-    # Convert LLM output directly to AgentResult
     result = AgentResult(
         agent=agent_name,
         status="ok",
@@ -84,5 +89,4 @@ def style_agent(state: GraphState) -> GraphState:
     )
     logger.log_agent_status(agent_name, case.case_id, "completed")
 
-    # Return only the new result entry (LangGraph will merge it with existing results)
     return {"results": {agent_name: result}}
