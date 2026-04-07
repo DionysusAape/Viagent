@@ -1,4 +1,4 @@
-"""Select spatial CV sub-skills via vision LLM + skills/spatial/SKILL.md."""
+"""Select spatial CV sub-skills via vision LLM + src/skill/spatial/SKILL.md."""
 from __future__ import annotations
 
 from typing import Any, Dict, List

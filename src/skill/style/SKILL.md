@@ -3,13 +3,13 @@ name: style
 description: >-
   Orchestrates style / spectral sub-skills (FFT) for Viagent. A vision LLM
   uses preview frames plus this file to decide whether to run FFT.
-license: Proprietary — Viagent
+license: Proprietary - Viagent
 metadata:
   project: viagent
   analyst_key: style
 ---
 
-# Style analyst — skill orchestration
+# Style analyst - skill orchestration
 
 Executable code: `src/skill/style/`.
 

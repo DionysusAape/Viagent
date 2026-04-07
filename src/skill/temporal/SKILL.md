@@ -2,15 +2,15 @@
 name: temporal
 description: >-
   Orchestrates temporal CV sub-skills (LPC, feature-point tracking) for Viagent.
-  A vision LLM uses preview frames plus this file’s viagent_routing to pick
+  A vision LLM uses preview frames plus this file's viagent_routing to pick
   which sub-skills run.
-license: Proprietary — Viagent
+license: Proprietary - Viagent
 metadata:
   project: viagent
   analyst_key: temporal
 ---
 
-# Temporal analyst — skill orchestration
+# Temporal analyst - skill orchestration
 
 Executable code: `src/skill/temporal/`. This file defines **when** each sub-skill is appropriate for LLM or explicit routing.
 
@@ -26,7 +26,7 @@ viagent_routing:
     - id: feature_stability
       when: >-
         Feature point tracking stability across frames. Useful when there is
-        texture and motion; weak for static slides or blank backgrounds—may still
+        texture and motion; weak for static slides or blank backgrounds-may still
         run if motion exists.
 ```
 

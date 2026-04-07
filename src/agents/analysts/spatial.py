@@ -47,7 +47,7 @@ def spatial_agent(state: GraphState) -> GraphState:
     )
     router_preview = pick_router_preview_frames(sampled_frame_inputs, max_router_preview)
 
-    # 4. Spatial Skills (vision LLM picks subset using preview frames + skills/spatial/SKILL.md)
+    # 4. Spatial Skills (vision LLM picks subset using preview frames + src/skill/spatial/SKILL.md)
     from skill.spatial.ela import analyze_ela_boundary
     from skill.spatial.patch_anomaly import analyze_patch_inconsistency
     from skill.spatial.boundary_anomaly import analyze_boundary_anomaly

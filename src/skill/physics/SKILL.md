@@ -4,13 +4,13 @@ description: >-
   Orchestrates physics/motion CV sub-skills (optical flow, geometry stability,
   NSG-lite) for Viagent. A vision LLM uses preview frames plus this file to pick
   sub-skills.
-license: Proprietary — Viagent
+license: Proprietary - Viagent
 metadata:
   project: viagent
   analyst_key: physics
 ---
 
-# Physics analyst — skill orchestration
+# Physics analyst - skill orchestration
 
 Executable code: `src/skill/physics/`.
 

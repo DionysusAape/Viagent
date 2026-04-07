@@ -1,4 +1,4 @@
-"""Sub-skill routing: multimodal LLM uses preview frames + skills/<agent>/SKILL.md."""
+"""Sub-skill routing: multimodal LLM uses preview frames + src/skill/<agent>/SKILL.md."""
 from __future__ import annotations
 
 import json
@@ -62,7 +62,7 @@ def vision_select_subskills(
     subskills = routing_subskills(routing)
     if not subskills:
         logger.warning(
-            f"{pack_name}: no viagent_routing in skills/{pack_name}/SKILL.md; "
+            f"{pack_name}: no viagent_routing in src/skill/{pack_name}/SKILL.md; "
             f"using conservative fallback {empty_selection_fallback}"
         )
         return list(empty_selection_fallback)

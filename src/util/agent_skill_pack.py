@@ -1,4 +1,4 @@
-"""Load Agent-Skills-style SKILL.md packs from repo skills/<agent>/SKILL.md."""
+"""Load Agent-Skills-style SKILL.md packs from repo src/skill/<agent>/SKILL.md."""
 from __future__ import annotations
 
 import re
@@ -24,10 +24,10 @@ def split_skill_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:
 
 def load_agent_skill_pack(agent_name: str) -> Tuple[Dict[str, Any], str]:
     """
-    Load skills/<agent_name>/SKILL.md. Returns (frontmatter_dict, body_markdown).
+    Load src/skill/<agent_name>/SKILL.md. Returns (frontmatter_dict, body_markdown).
     Missing file -> ({}, "").
     """
-    path = get_repo_root() / "skills" / agent_name / "SKILL.md"
+    path = get_repo_root() / "src" / "skill" / agent_name / "SKILL.md"
     if not path.is_file():
         return {}, ""
     raw = path.read_text(encoding="utf-8")

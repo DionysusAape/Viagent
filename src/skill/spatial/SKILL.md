@@ -4,13 +4,13 @@ description: >-
   Orchestrates spatial (frame-level) CV sub-skills for Viagent. When the spatial
   analyst runs, a vision LLM uses preview frames plus viagent_routing text here
   to choose which sub-skills to execute.
-license: Proprietary — Viagent
+license: Proprietary - Viagent
 metadata:
   project: viagent
   analyst_key: spatial
 ---
 
-# Spatial analyst — skill orchestration
+# Spatial analyst - skill orchestration
 
 This package follows the [Agent Skills](https://agentskills.io/specification) layout. **Executable code** lives in `src/skill/spatial/`; this file defines **which Python sub-skills exist** and **when each is appropriate**, so a router can activate a subset per video.
 
@@ -54,7 +54,7 @@ viagent_routing:
 
 ## Runtime (Viagent)
 
-Each analyst calls a **vision sub-skill router** before CV: a multimodal LLM sees a few preview frames (chronological spread) plus this file’s `viagent_routing` text and JSON metadata, then returns which sub-skills to run.
+Each analyst calls a **vision sub-skill router** before CV: a multimodal LLM sees a few preview frames (chronological spread) plus this file's `viagent_routing` text and JSON metadata, then returns which sub-skills to run.
 
 Optional `llm` YAML keys: `skill_router_temperature`, `skill_router_max_preview_frames`. Code: `src/agents/routing/router_llm.py`.
 
