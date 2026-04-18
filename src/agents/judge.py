@@ -428,6 +428,84 @@ def _run_visual_review(
     }
 
 
+def _run_direct_visual_judge(
+    case,
+    artifacts: Dict[str, Any],
+    config: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    """Direct visual judge path when no analyst results are available."""
+    frame_inputs = None
+    if artifacts is not None:
+        frame_inputs = artifacts.get("frame_inputs")
+    if not frame_inputs:
+        logger.warning(
+            f"[judge] Direct visual judge requested for {case.case_id} but no frame_inputs available"
+        )
+        return None
+
+    all_valid_frames = [f for f in frame_inputs if f is not None]
+    if not all_valid_frames:
+        logger.warning(
+            f"[judge] Direct visual judge requested for {case.case_id} but no valid frames available"
+        )
+        return None
+
+    llm_conf = config.get("llm", {})
+    max_images = int(llm_conf.get("max_images") or 50)
+    sampled_frames = sample_frames_for_llm(all_valid_frames, max_images)
+
+    prompt = JUDGE_VISUAL_PROMPT.format(
+        analysis_results=(
+            "No analyst results are available for this case. "
+            "You must judge directly from the provided video frames only."
+        ),
+    )
+
+    try:
+        llm_response = call_llm(
+            prompt=prompt,
+            config=config["llm"],
+            pydantic_model=JudgeLLMOutput,
+            images=sampled_frames,
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.error(
+            f"[judge] Direct visual judge LLM call failed for {case.case_id}: {error}"
+        )
+        return None
+
+    if (
+        llm_response is None
+        or llm_response.score_fake is None
+        or llm_response.confidence is None
+        or not llm_response.label
+    ):
+        logger.error(
+            f"[judge] Direct visual judge returned invalid response for {case.case_id}"
+        )
+        return None
+
+    label = llm_response.label
+    if label not in ("real", "fake"):
+        logger.warning(
+            f"[judge] Direct visual judge label '{label}' unexpected for {case.case_id}"
+        )
+        return None
+
+    logger.info(
+        f"[judge] DIRECT VISUAL JUDGE: label={label}, "
+        f"score={llm_response.score_fake:.3f}, "
+        f"conf={llm_response.confidence:.3f}"
+    )
+
+    return {
+        "label": label,
+        "score_fake": float(llm_response.score_fake),
+        "confidence": float(llm_response.confidence),
+        "rationale": llm_response.rationale,
+    }
+
+
 def judge_agent(state: GraphState) -> GraphState:
     """Judge agent that fuses results from multiple analysts into a verdict"""
     agent_name = AgentKey.JUDGE
@@ -442,7 +520,28 @@ def judge_agent(state: GraphState) -> GraphState:
     judge_cfg = config.get("judge_dynamic", {})
     use_dynamic = judge_cfg.get("enabled", False)
 
-    if use_dynamic:
+    if not results:
+        logger.info(
+            f"[judge] No analyst results for {case.case_id}; using direct visual judge"
+        )
+        direct_visual_decision = _run_direct_visual_judge(case, artifacts, config)
+        if direct_visual_decision is not None:
+            verdict = Verdict(
+                label=direct_visual_decision["label"],
+                score_fake=direct_visual_decision["score_fake"],
+                confidence=direct_visual_decision["confidence"],
+                rationale=direct_visual_decision["rationale"],
+                evidence=[],
+            )
+        else:
+            verdict = Verdict(
+                label="uncertain",
+                score_fake=0.5,
+                confidence=0.0,
+                rationale="No analyst results available and direct visual judge failed",
+                evidence=[],
+            )
+    elif use_dynamic:
         # Use dynamic decision logic
         # Convert results to dict format for decide_dynamic
         analysis_results = {}

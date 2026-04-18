@@ -45,7 +45,8 @@ class ViagentDB:
         run_id: str,
         case: VideoCase,
         config: Dict[str, Any],
-        analysts: List[str]
+        analysts: List[str],
+        duration_sec: Optional[float] = None,
     ) -> bool:
         """Save an analysis run record."""
         conn = None
@@ -56,9 +57,9 @@ class ViagentDB:
             cursor.execute('''
                 INSERT INTO analysis_run (
                     run_id, case_id, video_path, label, source,
-                    config, analysts, created_at, updated_at
+                    config, analysts, duration_sec, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 run_id,
                 case.case_id,
@@ -67,6 +68,7 @@ class ViagentDB:
                 case.source,
                 json.dumps(config),
                 json.dumps(analysts),
+                duration_sec,
                 datetime.now().isoformat(),
                 datetime.now().isoformat()
             ))
@@ -100,6 +102,7 @@ class ViagentDB:
                     'source': row['source'],
                     'config': self._parse_json(row['config']),
                     'analysts': self._parse_json(row['analysts']),
+                    'duration_sec': row['duration_sec'],
                     'created_at': row['created_at'],
                     'updated_at': row['updated_at']
                 }
@@ -144,6 +147,7 @@ class ViagentDB:
                     'source': row['source'],
                     'config': self._parse_json(row['config']),
                     'analysts': self._parse_json(row['analysts']),
+                    'duration_sec': row['duration_sec'],
                     'created_at': row['created_at'],
                     'updated_at': row['updated_at']
                 }
@@ -161,7 +165,8 @@ class ViagentDB:
     def save_agent_result(
         self,
         run_id: str,
-        agent_result: AgentResult
+        agent_result: AgentResult,
+        elapsed_sec: Optional[float] = None,
     ) -> Optional[str]:
         """Save an agent result."""
         conn = None
@@ -174,9 +179,9 @@ class ViagentDB:
             cursor.execute('''
                 INSERT INTO agent_result (
                     id, run_id, agent, status, score_fake,
-                    confidence, error, created_at
+                    confidence, elapsed_sec, error, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 result_id,
                 run_id,
@@ -184,6 +189,7 @@ class ViagentDB:
                 agent_result.status,
                 agent_result.score_fake,
                 agent_result.confidence,
+                elapsed_sec,
                 agent_result.error,
                 datetime.now().isoformat()
             ))
@@ -243,6 +249,7 @@ class ViagentDB:
                     'status': row['status'],
                     'score_fake': row['score_fake'],
                     'confidence': row['confidence'],
+                    'elapsed_sec': row['elapsed_sec'],
                     'error': row['error'],
                     'evidence': evidence,
                     'created_at': row['created_at']
@@ -505,14 +512,27 @@ class ViagentDB:
             analysts = analysis_data['analysts']
             results = analysis_data['results']
             verdict = analysis_data.get('verdict')
+            timings = analysis_data.get('timings') or {}
+            run_elapsed_sec = timings.get('run_elapsed_sec')
+            agent_elapsed_map = timings.get('agents') or {}
 
             # Save analysis run
-            if not self.save_analysis_run(run_id, case, config, analysts):
+            if not self.save_analysis_run(
+                run_id,
+                case,
+                config,
+                analysts,
+                duration_sec=run_elapsed_sec,
+            ):
                 return False
 
             # Save agent results
             for agent_result in results.values():
-                self.save_agent_result(run_id, agent_result)
+                self.save_agent_result(
+                    run_id,
+                    agent_result,
+                    elapsed_sec=agent_elapsed_map.get(agent_result.agent),
+                )
 
             # Save verdict if available
             if verdict:

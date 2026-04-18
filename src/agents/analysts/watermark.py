@@ -48,20 +48,25 @@ def watermark_agent(state: GraphState) -> GraphState:
     )
 
     # Convert LLM output directly to AgentResult
-    result = AgentResult(
-        agent=agent_name,
-        status="ok",
-        score_fake=llm_response.score_fake,
-        confidence=llm_response.confidence,
-        evidence=[
+    evidence_items = []
+    for item in llm_response.evidence or []:
+        if not isinstance(item, dict):
+            continue
+        evidence_items.append(
             EvidenceItem(
                 agent=agent_name,
                 type=item.get("type", "unknown"),
                 detail=item.get("detail", ""),
                 score=item.get("score", 0.0)
             )
-            for item in llm_response.evidence
-        ],
+        )
+
+    result = AgentResult(
+        agent=agent_name,
+        status="ok",
+        score_fake=llm_response.score_fake,
+        confidence=llm_response.confidence,
+        evidence=evidence_items,
         error=None
     )
 

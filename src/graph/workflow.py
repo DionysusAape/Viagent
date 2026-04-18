@@ -1,4 +1,5 @@
 """Agent-level workflow for video analysis decision making"""
+import time
 import uuid
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -62,6 +63,34 @@ class AgentWorkflow:
         if not self.workflow_analysts:
             logger.info("No analysts configured - using direct judge mode")
 
+    @staticmethod
+    def _format_elapsed(elapsed_seconds: float) -> str:
+        """Format elapsed seconds for logs."""
+        return f"{elapsed_seconds:.2f}s"
+
+    def _timed_agent_func(
+        self,
+        agent_key: str,
+        agent_func,
+        agent_elapsed_times: Dict[str, float],
+    ):
+        """Wrap an agent node function with elapsed-time logging."""
+        def _wrapped(state: GraphState):
+            case_id = state["case"].case_id
+            start = time.perf_counter()
+            logger.info(f"[timing] Agent {agent_key} started for {case_id}")
+            try:
+                return agent_func(state)
+            finally:
+                elapsed = time.perf_counter() - start
+                agent_elapsed_times[agent_key] = elapsed
+                logger.info(
+                    f"[timing] Agent {agent_key} elapsed for {case_id}: "
+                    f"{self._format_elapsed(elapsed)}"
+                )
+
+        return _wrapped
+
     def load_analysts(self, case: VideoCase, config: Dict[str, Any], artifacts: Dict[str, Any]):
         """
         Load the analysts for processing:
@@ -81,10 +110,18 @@ class AgentWorkflow:
                 planner_artifacts = artifacts
             else:
                 video_path_obj = Path(case.video_path)
-                rel_path = video_path_obj.relative_to(get_data_root()) if video_path_obj.is_absolute() else video_path_obj
+                if video_path_obj.is_absolute():
+                    rel_path = video_path_obj.relative_to(get_data_root())
+                else:
+                    rel_path = video_path_obj
                 planner_artifacts = load_evidence(make_video_id(rel_path), include_data_urls=True)
 
-            self.current_analysts = planner_agent(case, config, self.workflow_analysts, planner_artifacts)
+            self.current_analysts = planner_agent(
+                case,
+                config,
+                self.workflow_analysts,
+                planner_artifacts,
+            )
             if not self.current_analysts:
                 raise ValueError("No analysts selected by planner")
         else:
@@ -93,18 +130,43 @@ class AgentWorkflow:
 
         logger.info(f"Active analysts for {case.case_id}: {self.current_analysts}")
 
-    def check_human_eyes(self, case: VideoCase, artifacts: Dict[str, Any], config: Dict[str, Any], run_id: str) -> Optional[Dict[str, Any]]:
+    def check_human_eyes(
+        self,
+        case: VideoCase,
+        artifacts: Dict[str, Any],
+        config: Dict[str, Any],
+        run_ctx: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
         """Check human_eyes agent for obvious violations"""
         if not self.human_eyes_enabled:
             return None
 
+        start = time.perf_counter()
+        logger.info(f"[timing] Agent human_eyes started for {case.case_id}")
         human_eyes_verdict = human_eyes_agent(case, artifacts, config)
+        elapsed = time.perf_counter() - start
+        run_ctx["agent_elapsed_times"]["human_eyes"] = elapsed
+        logger.info(
+            f"[timing] Agent human_eyes elapsed for {case.case_id}: "
+            f"{self._format_elapsed(elapsed)}"
+        )
 
         # If human_eyes detected obvious fake, directly return verdict (skip graph)
         if human_eyes_verdict.label == "fake":
             logger.info(f"Human eyes detected obvious fake, skipping graph for {case.case_id}")
-            analysis_data = {"config": config, "analysts": [], "results": {}, "verdict": human_eyes_verdict}
+            run_elapsed_sec = time.perf_counter() - run_ctx["run_start"]
+            analysis_data = {
+                "config": config,
+                "analysts": [],
+                "results": {},
+                "verdict": human_eyes_verdict,
+                "timings": {
+                    "run_elapsed_sec": run_elapsed_sec,
+                    "agents": {"human_eyes": elapsed},
+                },
+            }
 
+            run_id = run_ctx["run_id"]
             if not self._db.save_complete_analysis(run_id, case, analysis_data):
                 raise RuntimeError(f"Failed to save decision to database: {run_id}")
             logger.info(f"Decision results saved to database: {run_id}")
@@ -124,20 +186,29 @@ class AgentWorkflow:
 
         return None
 
-    def build(self) -> StateGraph:
+    def build(self, agent_elapsed_times: Dict[str, float]) -> StateGraph:
         """Build the workflow graph"""
         graph = StateGraph(GraphState)
 
         # Create node for judge
-        graph.add_node(AgentKey.JUDGE, judge_agent)
+        graph.add_node(
+            AgentKey.JUDGE,
+            self._timed_agent_func(AgentKey.JUDGE, judge_agent, agent_elapsed_times),
+        )
 
         # Create node for each analyst
         if self.current_analysts:
             for analyst_key in self.current_analysts:
                 agent_func = AgentRegistry.get_agent_func_by_key(analyst_key)
                 if agent_func is None:
-                    raise ValueError(f"Agent function not found for key: {analyst_key}. Make sure AgentRegistry.run_registry() was called.")
-                graph.add_node(analyst_key, agent_func)
+                    raise ValueError(
+                        f"Agent function not found for key: {analyst_key}. "
+                        "Make sure AgentRegistry.run_registry() was called."
+                    )
+                graph.add_node(
+                    analyst_key,
+                    self._timed_agent_func(analyst_key, agent_func, agent_elapsed_times),
+                )
                 graph.add_edge(START, analyst_key)
                 graph.add_edge(analyst_key, AgentKey.JUDGE)
         else:
@@ -150,7 +221,12 @@ class AgentWorkflow:
 
         return workflow
 
-    def run_decision(self, case: VideoCase, artifacts: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def run_decision(
+        self,
+        case: VideoCase,
+        artifacts: Dict[str, Any],
+        config: Dict[str, Any],
+    ) -> Dict[str, Any]:
         """
         Run decision workflow for a single video case.
         
@@ -161,17 +237,37 @@ class AgentWorkflow:
            runs the selected analyst agents, and finally the judge agent
         """
         run_id = str(uuid.uuid4())[:8]
-        logger.info(f"Running decision workflow for case: {case.case_id} (run_id: {run_id})")
+        experiment_name = config.get("experiment_name", "config")
+        run_start = time.perf_counter()
+        agent_elapsed_times: Dict[str, float] = {}
+        logger.info(
+            f"Running decision workflow for case: {case.case_id} "
+            f"(run_id: {run_id})"
+        )
 
         # Step 1: Run human_eyes check first (if enabled) - outside graph
-        human_eyes_result = self.check_human_eyes(case, artifacts, config, run_id)
+        human_eyes_result = self.check_human_eyes(
+            case,
+            artifacts,
+            config,
+            {
+                "run_id": run_id,
+                "run_start": run_start,
+                "agent_elapsed_times": agent_elapsed_times,
+            },
+        )
         if human_eyes_result:
+            elapsed = time.perf_counter() - run_start
+            logger.info(
+                f"[timing] Experiment {experiment_name} elapsed for {case.case_id}: "
+                f"{self._format_elapsed(elapsed)} (human_eyes_shortcut=true)"
+            )
             return human_eyes_result
 
         # Step 2: Normal flow - load analysts and run graph
         self.load_analysts(case, config, artifacts)
 
-        workflow = self.build()
+        workflow = self.build(agent_elapsed_times)
         logger.info(f"{case.case_id} workflow compiled successfully")
 
         initial_state: GraphState = {
@@ -198,10 +294,19 @@ class AgentWorkflow:
             "analysts": final_state["analysts"],
             "results": final_state["results"],
             "verdict": final_state["verdict"],
+            "timings": {
+                "run_elapsed_sec": time.perf_counter() - run_start,
+                "agents": agent_elapsed_times,
+            },
         }
         if not self._db.save_complete_analysis(run_id, case, analysis_data):
             raise RuntimeError(f"Failed to save decision to database: {run_id}")
         logger.info(f"Decision results saved to database: {run_id}")
+        elapsed = time.perf_counter() - run_start
+        logger.info(
+            f"[timing] Experiment {experiment_name} elapsed for {case.case_id}: "
+            f"{self._format_elapsed(elapsed)}"
+        )
 
         return {
             "run_id": final_state["run_id"],

@@ -8,6 +8,15 @@ load_dotenv()
 DB_PATH = os.getenv("DB_PATH")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
+
+def _add_column_if_missing(cursor: sqlite3.Cursor, table: str, column: str, definition: str) -> None:
+    """Add a column to table if it does not already exist."""
+    cursor.execute(f"PRAGMA table_info({table})")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    if column not in existing_columns:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def init_database():
     """Initialize the database and create tables if they don't exist."""
     conn = sqlite3.connect(DB_PATH)
@@ -26,6 +35,7 @@ def init_database():
         source VARCHAR(50),
         config JSON,
         analysts JSON,
+        duration_sec REAL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
@@ -40,6 +50,7 @@ def init_database():
         status VARCHAR(20) NOT NULL,
         score_fake REAL,
         confidence REAL,
+        elapsed_sec REAL,
         error TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (run_id) REFERENCES analysis_run(run_id) ON DELETE CASCADE
@@ -58,6 +69,10 @@ def init_database():
         FOREIGN KEY (agent_result_id) REFERENCES agent_result(id) ON DELETE CASCADE
     )
     ''')
+
+    # Backward-compatible schema migration for existing databases
+    _add_column_if_missing(cursor, "analysis_run", "duration_sec", "REAL")
+    _add_column_if_missing(cursor, "agent_result", "elapsed_sec", "REAL")
 
     # Create verdict table - stores final verdict from judge
     cursor.execute('''

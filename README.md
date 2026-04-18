@@ -135,7 +135,7 @@ python src/statistics.py --list-experiments
 
 ## 配置说明（摘要）
 
-- 主配置：`src/config/config.yaml`（`experiment_name`、`llm`、`workflow_analysts`、`human_eyes_enabled`、`planner_mode` 等）。
+- 主配置：`src/config/config.yaml`（`experiment_name`、`enable_skills`（为 `false` 时 style/physics/spatial/temporal 跳过 CV，仅视觉 LLM）、`llm`、`workflow_analysts`、`human_eyes_enabled`、`planner_mode` 等）。
 - 路径优先级：**环境变量 `DATA_ROOT` / `CACHE_ROOT`** 高于默认的 `data/`、`cache/`。
 - 实验隔离：不同配置中的 `experiment_name`（或不同 yaml 文件名推导出的实验名）用于区分结果与断点续跑逻辑。
 

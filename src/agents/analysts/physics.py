@@ -4,6 +4,7 @@ from graph.schema import AgentResult, GraphState, EvidenceItem, AnalystLLMOutput
 from llm.inference import call_llm
 from llm.prompt import PHYSICS_PROMPT
 from util.logger import logger
+from util.skills_config import cv_skills_enabled
 from util.frame_sampling import sample_frames_for_llm
 from skill.physics.optical_flow import analyze_frames_optical_flow_batch, format_optical_flow_for_prompt
 from skill.physics.geometry_stability_check import (
@@ -36,13 +37,19 @@ def physics_agent(state: GraphState) -> GraphState:
     frame_labels = [f"Frame {index + 1}" for index in range(frame_count)]
     frame_labels_str = ", ".join(frame_labels)
 
-    max_router_preview = int(
-        llm_conf.get("skill_router_max_preview_frames", ROUTER_PREVIEW_MAX_FRAMES)
-    )
-    router_preview = pick_router_preview_frames(sampled_frames, max_router_preview)
-    selected_skill_ids = select_physics_skill_ids(case, artifacts, config, router_preview)
-    active = set(selected_skill_ids)
-    logger.info(f"{case.case_id} physics sub-skills active: {selected_skill_ids}")
+    if cv_skills_enabled(config):
+        max_router_preview = int(
+            llm_conf.get("skill_router_max_preview_frames", ROUTER_PREVIEW_MAX_FRAMES)
+        )
+        router_preview = pick_router_preview_frames(sampled_frames, max_router_preview)
+        selected_skill_ids = select_physics_skill_ids(case, artifacts, config, router_preview)
+        active = set(selected_skill_ids)
+        logger.info(f"{case.case_id} physics sub-skills active: {selected_skill_ids}")
+    else:
+        active = set()
+        logger.info(
+            f"{case.case_id} physics: CV sub-skills disabled (enable_skills: false), vision-only"
+        )
 
     physics_config = config.get("physics", {})
 
@@ -116,20 +123,25 @@ def physics_agent(state: GraphState) -> GraphState:
         images=sampled_frames,
     )
 
-    result = AgentResult(
-        agent=agent_name,
-        status="ok",
-        score_fake=llm_response.score_fake,
-        confidence=llm_response.confidence,
-        evidence=[
+    evidence_items = []
+    for item in llm_response.evidence or []:
+        if not isinstance(item, dict):
+            continue
+        evidence_items.append(
             EvidenceItem(
                 agent=agent_name,
                 type=item.get("type", "unknown"),
                 detail=item.get("detail", ""),
                 score=item.get("score", 0.0),
             )
-            for item in llm_response.evidence
-        ],
+        )
+
+    result = AgentResult(
+        agent=agent_name,
+        status="ok",
+        score_fake=llm_response.score_fake,
+        confidence=llm_response.confidence,
+        evidence=evidence_items,
         error=None,
     )
 

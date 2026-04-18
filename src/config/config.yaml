@@ -4,6 +4,8 @@
 # Experiment name (used for statistics and tracking)
 experiment_name: config
 
+# CV sub-skills (routing + OpenCV) for style/physics/spatial/temporal. false = vision-only LLM for those analysts.
+enable_skills: true
 
 # Multi-Agent Workflow
 human_eyes_enabled: true
@@ -38,7 +40,7 @@ judge_dynamic:
 # LLM Configuration
 llm:
   provider: yizhan
-  model: gpt-5.2-2025-12-11
+  model: claude-sonnet-4-6-thinking
   max_images: 50  # 单次 LLM 调用允许的最大图片数，用于均匀抽样帧
 
 #gpt-5-mini

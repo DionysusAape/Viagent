@@ -46,6 +46,9 @@ def extract_config_signature(config_dict: Dict) -> Dict[str, Any]:
     if 'workflow_analysts' in config_dict:
         signature['workflow_analysts'] = sorted(config_dict['workflow_analysts'])
 
+    if 'enable_skills' in config_dict:
+        signature['enable_skills'] = bool(config_dict['enable_skills'])
+
     return signature
 
 
@@ -81,7 +84,10 @@ def config_matches(config_json_str: str, target_signature: Dict) -> bool:
 
 def get_all_results(
     config_path: Optional[str] = None
-) -> Tuple[List[Tuple[str, str, str, float, float]], Optional[str]]:
+) -> Tuple[
+    List[Tuple[str, str, str, float, float, Optional[float]]],
+    Optional[str],
+]:
     """
     从数据库获取分析结果，可选按配置文件过滤
 
@@ -90,7 +96,7 @@ def get_all_results(
 
     Returns:
         Tuple of (results, experiment_name)
-        results: List of (case_id, true_label, predicted_label, score_fake, confidence)
+        results: List of (case_id, true_label, predicted_label, score_fake, confidence, duration_sec)
         experiment_name: 试验名称（从配置文件名或 experiment_name 字段提取）
     """
     init_database()
@@ -127,7 +133,8 @@ def get_all_results(
             ar.config as config_json,
             v.label as predicted_label,
             v.score_fake,
-            v.confidence
+            v.confidence,
+            ar.duration_sec
         FROM analysis_run ar
         INNER JOIN verdict v ON ar.run_id = v.run_id
         WHERE ar.label IS NOT NULL
@@ -156,6 +163,7 @@ def get_all_results(
                 row["predicted_label"].lower(),
                 row["score_fake"],
                 row["confidence"],
+                row["duration_sec"],
             )
         )
 
@@ -164,7 +172,7 @@ def get_all_results(
 
 
 def get_misclassified_and_uncertain(
-    results: List[Tuple[str, str, str, float, float]]
+    results: List[Tuple[str, str, str, float, float, Optional[float]]]
 ) -> Tuple[List[Tuple[str, str, str]], List[Tuple[str, str, str]]]:
     """
     从结果中提取预测错误的视频列表。
@@ -173,18 +181,31 @@ def get_misclassified_and_uncertain(
     因为系统已经不再使用 uncertain 标签。
     """
     misclassified: List[Tuple[str, str, str]] = []
-    for case_id, true_label, predicted_label, _score_fake, _confidence in results:
+    for case_id, true_label, predicted_label, _score_fake, _confidence, _duration_sec in results:
         if predicted_label != true_label:
             misclassified.append((case_id, true_label, predicted_label))
     return misclassified, []
 
 
-def calculate_metrics(results: List[Tuple[str, str, str, float, float]]) -> Dict:
+def _percentile(values: List[float], pct: float) -> float:
+    """Compute percentile from sorted values with linear interpolation."""
+    if not values:
+        return 0.0
+    if len(values) == 1:
+        return values[0]
+    idx = (len(values) - 1) * pct
+    lower = int(idx)
+    upper = min(lower + 1, len(values) - 1)
+    ratio = idx - lower
+    return values[lower] * (1.0 - ratio) + values[upper] * ratio
+
+
+def calculate_metrics(results: List[Tuple[str, str, str, float, float, Optional[float]]]) -> Dict:
     """
     计算各种评估指标
 
     Args:
-        results: List of (case_id, true_label, predicted_label, score_fake, confidence)
+        results: List of (case_id, true_label, predicted_label, score_fake, confidence, duration_sec)
 
     Returns:
         Dict with various metrics
@@ -197,7 +218,7 @@ def calculate_metrics(results: List[Tuple[str, str, str, float, float]]) -> Dict
     by_true_label = defaultdict(list)
     by_predicted_label = defaultdict(list)
 
-    for _, true_label, predicted_label, score_fake, confidence in results:
+    for _, true_label, predicted_label, score_fake, confidence, _duration_sec in results:
         key = (true_label, predicted_label)
         confusion_matrix[key] += 1
         by_true_label[true_label].append((predicted_label, score_fake, confidence))
@@ -244,7 +265,7 @@ def calculate_metrics(results: List[Tuple[str, str, str, float, float]]) -> Dict
     correct_count = 0
     wrong_count = 0
 
-    for _, true_label, predicted_label, score_fake, confidence in results:
+    for _, true_label, predicted_label, score_fake, confidence, _duration_sec in results:
         if predicted_label == 'uncertain':
             continue
         is_correct = true_label == predicted_label
@@ -257,6 +278,28 @@ def calculate_metrics(results: List[Tuple[str, str, str, float, float]]) -> Dict
 
     avg_confidence_correct = avg_confidence_correct / correct_count if correct_count > 0 else 0.0
     avg_confidence_wrong = avg_confidence_wrong / wrong_count if wrong_count > 0 else 0.0
+
+    durations = [row[5] for row in results if row[5] is not None]
+    durations_sorted = sorted(float(x) for x in durations)
+    timing_metrics = {
+        'count': len(durations_sorted),
+        'total_sec': sum(durations_sorted) if durations_sorted else 0.0,
+        'avg_sec': (sum(durations_sorted) / len(durations_sorted)) if durations_sorted else 0.0,
+        'median_sec': _percentile(durations_sorted, 0.5) if durations_sorted else 0.0,
+        'p90_sec': _percentile(durations_sorted, 0.9) if durations_sorted else 0.0,
+        'min_sec': durations_sorted[0] if durations_sorted else 0.0,
+        'max_sec': durations_sorted[-1] if durations_sorted else 0.0,
+    }
+
+    slowest_cases = sorted(
+        (
+            (case_id, float(duration_sec))
+            for case_id, _tl, _pl, _sf, _cf, duration_sec in results
+            if duration_sec is not None
+        ),
+        key=lambda x: x[1],
+        reverse=True,
+    )[:5]
 
     return {
         'total': total,
@@ -276,10 +319,12 @@ def calculate_metrics(results: List[Tuple[str, str, str, float, float]]) -> Dict
         'f1_real': f1_real,
         'avg_confidence_correct': avg_confidence_correct,
         'avg_confidence_wrong': avg_confidence_wrong,
+        'timing': timing_metrics,
+        'slowest_cases': slowest_cases,
     }
 
 
-def print_statistics(metrics: Dict, experiment_name: Optional[str] = None):
+def print_statistics(experiment_name: Optional[str] = None):
     """打印统计结果"""
     print("=" * 80)
     print("📊 视频分析结果统计")
@@ -290,7 +335,7 @@ def print_statistics(metrics: Dict, experiment_name: Optional[str] = None):
 
 
 def print_error_cases(
-    results: List[Tuple[str, str, str, float, float]],
+    results: List[Tuple[str, str, str, float, float, Optional[float]]],
     metrics: Dict,
 ) -> None:
     """
@@ -299,7 +344,7 @@ def print_error_cases(
     视频名字通过解析 case_id -> 相对路径获得；
     如果解析失败，则回退为原始 case_id。
     """
-    misclassified, uncertain = get_misclassified_and_uncertain(results)
+    misclassified, _uncertain = get_misclassified_and_uncertain(results)
 
     print("=" * 80)
     print("📂 预测错误的视频列表")
@@ -312,7 +357,7 @@ def print_error_cases(
             try:
                 rel_path = parse_video_id(case_id)
                 name = str(rel_path)
-            except Exception:
+            except (TypeError, ValueError, KeyError):
                 name = case_id
             print(f"   {name}  (真值: {true_label}, 预测: {predicted_label})")
         print(f"\n   总计预测错误视频数: {len(misclassified)}")
@@ -352,6 +397,32 @@ def print_error_cases(
     print(f"   正确预测的平均置信度: {metrics['avg_confidence_correct']:.4f}")
     print(f"   错误预测的平均置信度: {metrics['avg_confidence_wrong']:.4f}")
     print()
+
+    timing = metrics.get('timing', {})
+    if timing.get('count', 0) > 0:
+        print("⏱️  耗时统计（analysis_run.duration_sec）:")
+        print(f"   样本数: {timing['count']}")
+        print(f"   总耗时: {timing['total_sec']:.2f}s")
+        print(f"   平均耗时: {timing['avg_sec']:.2f}s")
+        print(f"   中位数: {timing['median_sec']:.2f}s")
+        print(f"   P90: {timing['p90_sec']:.2f}s")
+        print(f"   最快/最慢: {timing['min_sec']:.2f}s / {timing['max_sec']:.2f}s")
+        print()
+
+        slowest_cases = metrics.get('slowest_cases', [])
+        if slowest_cases:
+            print("🐢 最慢样本 Top 5:")
+            for case_id, duration_sec in slowest_cases:
+                try:
+                    rel_path = parse_video_id(case_id)
+                    name = str(rel_path)
+                except (TypeError, ValueError, KeyError):
+                    name = case_id
+                print(f"   {name}  ({duration_sec:.2f}s)")
+            print()
+    else:
+        print("⏱️  耗时统计: 当前结果缺少 duration_sec，无法计算。")
+        print()
 
     print("=" * 80)
 
@@ -457,7 +528,7 @@ def main():
     print()
 
     metrics = calculate_metrics(results)
-    print_statistics(metrics, experiment_name)
+    print_statistics(experiment_name)
 
     # 额外输出：预测错误的视频名字列表
     print_error_cases(results, metrics)

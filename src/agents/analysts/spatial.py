@@ -4,6 +4,7 @@ from graph.schema import AgentResult, GraphState, EvidenceItem, AnalystLLMOutput
 from llm.inference import call_llm
 from llm.prompt import SPATIAL_PROMPT
 from util.logger import logger
+from util.skills_config import cv_skills_enabled
 from util.frame_sampling import sample_frame_indices_for_llm
 from pipeline.evidence import get_evidence_paths
 from agents.routing.router_llm import pick_router_preview_frames, ROUTER_PREVIEW_MAX_FRAMES
@@ -40,24 +41,8 @@ def spatial_agent(state: GraphState) -> GraphState:
     # 3. Use all sampled frames for analysis (no frame selector)
     # This ensures we don't miss frames with useful information
     selected_frames = sampled_frames_data
+    frame_labels = [f"Frame {f['index']}" for f in selected_frames]
     spatial_config = config.get("spatial", {})
-
-    max_router_preview = int(
-        llm_conf.get("skill_router_max_preview_frames", ROUTER_PREVIEW_MAX_FRAMES)
-    )
-    router_preview = pick_router_preview_frames(sampled_frame_inputs, max_router_preview)
-
-    # 4. Spatial Skills (vision LLM picks subset using preview frames + src/skill/spatial/SKILL.md)
-    from skill.spatial.ela import analyze_ela_boundary
-    from skill.spatial.patch_anomaly import analyze_patch_inconsistency
-    from skill.spatial.boundary_anomaly import analyze_boundary_anomaly
-    from skill.spatial.edge_coherence import analyze_edge_coherence
-    from skill.spatial.multi_face_collapse_detection import analyze_multi_face_collapse
-    from skill.spatial.blur_uniformity import analyze_blur_uniformity
-
-    selected_skill_ids = select_spatial_skill_ids(case, artifacts, config, router_preview)
-    active = set(selected_skill_ids)
-    logger.info(f"{case.case_id} spatial sub-skills active: {selected_skill_ids}")
 
     ela_results: dict = {}
     patch_results: dict = {}
@@ -66,67 +51,94 @@ def spatial_agent(state: GraphState) -> GraphState:
     multi_face_results: dict = {}
     blur_results: dict = {}
 
-    try:
-        if "ela" in active:
-            ela_results = analyze_ela_boundary(
-                selected_frames,
-                frames_dir,
-                frame_inputs=sampled_frame_inputs,
-                config=spatial_config,
-            )
-        if "patch" in active:
-            patch_results = analyze_patch_inconsistency(
-                selected_frames,
-                frames_dir,
-                frame_inputs=sampled_frame_inputs,
-                config=spatial_config,
-            )
-        if "boundary" in active:
-            boundary_results = analyze_boundary_anomaly(
-                selected_frames,
-                frames_dir,
-                frame_inputs=sampled_frame_inputs,
-                config=spatial_config,
-            )
-        if "edge" in active:
-            edge_results = analyze_edge_coherence(
-                selected_frames,
-                frames_dir,
-                frame_inputs=sampled_frame_inputs,
-                config=spatial_config,
-            )
-        if "multi_face" in active:
-            multi_face_results = analyze_multi_face_collapse(
-                selected_frames,
-                frames_dir,
-                frame_inputs=sampled_frame_inputs,
-                config=spatial_config,
-            )
-        if "blur" in active:
-            blur_results = analyze_blur_uniformity(
-                selected_frames,
-                frames_dir,
-                frame_inputs=sampled_frame_inputs,
-                multi_face_results=multi_face_results or None,
-                config=spatial_config,
-            )
-    except (ValueError, IOError) as error:
-        logger.error(f"Spatial skills analysis failed for {case.case_id}: {error}")
-        raise RuntimeError(f"Spatial skills analysis failed: {error}") from error
+    if cv_skills_enabled(config):
+        max_router_preview = int(
+            llm_conf.get("skill_router_max_preview_frames", ROUTER_PREVIEW_MAX_FRAMES)
+        )
+        router_preview = pick_router_preview_frames(sampled_frame_inputs, max_router_preview)
 
-    # 5. Format results
-    frame_labels = [f"Frame {f['index']}" for f in selected_frames]
-    from skill.spatial.formatter import format_spatial_skills_for_prompt
-    spatial_skills_description = format_spatial_skills_for_prompt(
-        ela_results,
-        patch_results,
-        boundary_results,
-        edge_results,
-        multi_face_results,
-        blur_results,
-        selected_frames,
-        frame_labels,
-    )
+        # 4. Spatial Skills (vision LLM picks subset using preview frames + src/skill/spatial/SKILL.md)
+        from skill.spatial.ela import analyze_ela_boundary
+        from skill.spatial.patch_anomaly import analyze_patch_inconsistency
+        from skill.spatial.boundary_anomaly import analyze_boundary_anomaly
+        from skill.spatial.edge_coherence import analyze_edge_coherence
+        from skill.spatial.multi_face_collapse_detection import analyze_multi_face_collapse
+        from skill.spatial.blur_uniformity import analyze_blur_uniformity
+
+        selected_skill_ids = select_spatial_skill_ids(case, artifacts, config, router_preview)
+        active = set(selected_skill_ids)
+        logger.info(f"{case.case_id} spatial sub-skills active: {selected_skill_ids}")
+
+        try:
+            if "ela" in active:
+                ela_results = analyze_ela_boundary(
+                    selected_frames,
+                    frames_dir,
+                    frame_inputs=sampled_frame_inputs,
+                    config=spatial_config,
+                )
+            if "patch" in active:
+                patch_results = analyze_patch_inconsistency(
+                    selected_frames,
+                    frames_dir,
+                    frame_inputs=sampled_frame_inputs,
+                    config=spatial_config,
+                )
+            if "boundary" in active:
+                boundary_results = analyze_boundary_anomaly(
+                    selected_frames,
+                    frames_dir,
+                    frame_inputs=sampled_frame_inputs,
+                    config=spatial_config,
+                )
+            if "edge" in active:
+                edge_results = analyze_edge_coherence(
+                    selected_frames,
+                    frames_dir,
+                    frame_inputs=sampled_frame_inputs,
+                    config=spatial_config,
+                )
+            if "multi_face" in active:
+                multi_face_results = analyze_multi_face_collapse(
+                    selected_frames,
+                    frames_dir,
+                    frame_inputs=sampled_frame_inputs,
+                    config=spatial_config,
+                )
+            if "blur" in active:
+                blur_results = analyze_blur_uniformity(
+                    selected_frames,
+                    frames_dir,
+                    frame_inputs=sampled_frame_inputs,
+                    multi_face_results=multi_face_results or None,
+                    config=spatial_config,
+                )
+        except (ValueError, IOError) as error:
+            logger.error(f"Spatial skills analysis failed for {case.case_id}: {error}")
+            raise RuntimeError(f"Spatial skills analysis failed: {error}") from error
+
+        # 5. Format results
+        from skill.spatial.formatter import format_spatial_skills_for_prompt
+
+        spatial_skills_description = format_spatial_skills_for_prompt(
+            ela_results,
+            patch_results,
+            boundary_results,
+            edge_results,
+            multi_face_results,
+            blur_results,
+            selected_frames,
+            frame_labels,
+        )
+    else:
+        logger.info(
+            f"{case.case_id} spatial: CV sub-skills disabled (enable_skills: false), vision-only"
+        )
+        spatial_skills_description = (
+            "**Algorithm Evidence (Spatial Artifacts Analysis):**\n\n"
+            "*CV sub-skills are disabled (`enable_skills: false`). "
+            "No spatial algorithm metrics were computed; rely on visual analysis only.*"
+        )
 
     # 6. Prepare images for LLM (all sampled frames)
     # Since selected_frames = sampled_frames_data, we can use sampled_frame_inputs directly
@@ -148,20 +160,25 @@ def spatial_agent(state: GraphState) -> GraphState:
     )
 
     # 9. Build result (completely compatible with existing format)
-    result = AgentResult(
-        agent=agent_name,
-        status="ok",
-        score_fake=llm_response.score_fake,
-        confidence=llm_response.confidence,
-        evidence=[
+    evidence_items = []
+    for item in llm_response.evidence or []:
+        if not isinstance(item, dict):
+            continue
+        evidence_items.append(
             EvidenceItem(
                 agent=agent_name,
                 type=item.get("type", "unknown"),
                 detail=item.get("detail", ""),  # Already contains algorithm metrics
                 score=item.get("score", 0.0)
             )
-            for item in llm_response.evidence
-        ],
+        )
+
+    result = AgentResult(
+        agent=agent_name,
+        status="ok",
+        score_fake=llm_response.score_fake,
+        confidence=llm_response.confidence,
+        evidence=evidence_items,
         error=None
     )
 

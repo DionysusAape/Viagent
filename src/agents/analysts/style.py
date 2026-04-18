@@ -4,6 +4,7 @@ from graph.schema import AgentResult, GraphState, EvidenceItem, AnalystLLMOutput
 from llm.inference import call_llm
 from llm.prompt import STYLE_PROMPT
 from util.logger import logger
+from util.skills_config import cv_skills_enabled
 from util.frame_sampling import sample_frames_for_llm
 from skill.style.fft_analysis import analyze_frames_fft_batch, format_fft_features_for_prompt
 from agents.routing.router_llm import pick_router_preview_frames, ROUTER_PREVIEW_MAX_FRAMES
@@ -32,13 +33,19 @@ def style_agent(state: GraphState) -> GraphState:
     frame_labels = [f"Frame {index + 1}" for index in range(frame_count)]
     frame_labels_str = ", ".join(frame_labels)
 
-    max_router_preview = int(
-        llm_conf.get("skill_router_max_preview_frames", ROUTER_PREVIEW_MAX_FRAMES)
-    )
-    router_preview = pick_router_preview_frames(sampled_frames, max_router_preview)
-    selected_skill_ids = select_style_skill_ids(case, artifacts, config, router_preview)
-    active = set(selected_skill_ids)
-    logger.info(f"{case.case_id} style sub-skills active: {selected_skill_ids}")
+    if cv_skills_enabled(config):
+        max_router_preview = int(
+            llm_conf.get("skill_router_max_preview_frames", ROUTER_PREVIEW_MAX_FRAMES)
+        )
+        router_preview = pick_router_preview_frames(sampled_frames, max_router_preview)
+        selected_skill_ids = select_style_skill_ids(case, artifacts, config, router_preview)
+        active = set(selected_skill_ids)
+        logger.info(f"{case.case_id} style sub-skills active: {selected_skill_ids}")
+    else:
+        active = set()
+        logger.info(
+            f"{case.case_id} style: CV sub-skills disabled (enable_skills: false), vision-only"
+        )
 
     fft_description = (
         "**FFT / frequency-domain style cues:**\n\n"
@@ -65,20 +72,25 @@ def style_agent(state: GraphState) -> GraphState:
         images=sampled_frames,
     )
 
-    result = AgentResult(
-        agent=agent_name,
-        status="ok",
-        score_fake=llm_response.score_fake,
-        confidence=llm_response.confidence,
-        evidence=[
+    evidence_items = []
+    for item in llm_response.evidence or []:
+        if not isinstance(item, dict):
+            continue
+        evidence_items.append(
             EvidenceItem(
                 agent=agent_name,
                 type=item.get("type", "unknown"),
                 detail=item.get("detail", ""),
                 score=item.get("score", 0.0),
             )
-            for item in llm_response.evidence
-        ],
+        )
+
+    result = AgentResult(
+        agent=agent_name,
+        status="ok",
+        score_fake=llm_response.score_fake,
+        confidence=llm_response.confidence,
+        evidence=evidence_items,
         error=None,
     )
 

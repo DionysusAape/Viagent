@@ -25,6 +25,7 @@ from pathlib import Path
 from database.db_helper import ViagentDB
 from pipeline.analyze import analyze_video, list_videos
 from util.config import get_batch_delay_sec, load_config
+from util.logger import logger
 from util.paths import get_data_root
 
 
@@ -35,6 +36,7 @@ def batch_analyze(
     config_path: str | None = None,
 ) -> None:
     """批量分析视频（简单版本，不做额外异常包装）"""
+    experiment_start = time.perf_counter()
     if delay is None:
         delay = get_batch_delay_sec()
 
@@ -66,6 +68,7 @@ def batch_analyze(
     # 如果配置中显式提供 experiment_name，则优先生效
     if "experiment_name" in current_config:
         experiment_name = current_config["experiment_name"]
+    logger.info(f"[timing] Experiment {experiment_name} batch started")
 
     while True:
         result = list_videos(label=label, generator=generator, limit=batch_size, offset=offset)
@@ -139,6 +142,11 @@ def batch_analyze(
     print(f"   跳过: {skipped}")
     print(f"   总计: {success + failed_count + skipped}")
     print("=" * 80)
+    experiment_elapsed = time.perf_counter() - experiment_start
+    logger.info(
+        f"[timing] Experiment {experiment_name} batch elapsed: "
+        f"{experiment_elapsed:.2f}s"
+    )
 
 
 def main():
@@ -201,10 +209,20 @@ def main():
         if video_path.is_file():
             # 单个视频模式
             print(f"🔍 正在分析视频: {video_path}")
+            single_start = time.perf_counter()
             result = analyze_video(
                 video_path=label,
                 label=None,
                 config_path=args.config,
+            )
+            single_elapsed = time.perf_counter() - single_start
+            single_experiment_name = "config"
+            single_config = load_config(args.config)
+            if "experiment_name" in single_config:
+                single_experiment_name = single_config["experiment_name"]
+            logger.info(
+                f"[timing] Experiment {single_experiment_name} single-run elapsed: "
+                f"{single_elapsed:.2f}s"
             )
 
             if args.json:

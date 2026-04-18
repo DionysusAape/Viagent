@@ -7,6 +7,7 @@ from pipeline.evidence import get_evidence_paths
 from skill.temporal.local_phase_coherence import analyze_lpc_sequence
 from skill.temporal.feature_stability_check import analyze_feature_stability
 from util.logger import logger
+from util.skills_config import cv_skills_enabled
 from util.frame_sampling import sample_frame_indices_for_llm
 from agents.routing.router_llm import pick_router_preview_frames, ROUTER_PREVIEW_MAX_FRAMES
 from agents.routing.temporal_skill_router import select_temporal_skill_ids
@@ -43,7 +44,7 @@ def temporal_agent(state: GraphState) -> GraphState:
 
     temporal_algo_evidence_parts = []
     frames_meta = artifacts.get("frames") or []
-    if frames_meta:
+    if frames_meta and cv_skills_enabled(config):
         max_router_preview = int(
             llm_conf.get("skill_router_max_preview_frames", ROUTER_PREVIEW_MAX_FRAMES)
         )
@@ -109,6 +110,10 @@ def temporal_agent(state: GraphState) -> GraphState:
                 logger.error(
                     f"Temporal feature_stability skill failed for {case.case_id}: {error}"
                 )
+    elif frames_meta and not cv_skills_enabled(config):
+        logger.info(
+            f"{case.case_id} temporal: CV sub-skills disabled (enable_skills: false), vision-only"
+        )
 
     temporal_algo_evidence = ""
     if temporal_algo_evidence_parts:
@@ -133,20 +138,25 @@ def temporal_agent(state: GraphState) -> GraphState:
         images=sampled_frames
     )
 
-    result = AgentResult(
-        agent=agent_name,
-        status="ok",
-        score_fake=llm_response.score_fake,
-        confidence=llm_response.confidence,
-        evidence=[
+    evidence_items = []
+    for item in llm_response.evidence or []:
+        if not isinstance(item, dict):
+            continue
+        evidence_items.append(
             EvidenceItem(
                 agent=agent_name,
                 type=item.get("type", "unknown"),
                 detail=item.get("detail", ""),
                 score=item.get("score", 0.0)
             )
-            for item in llm_response.evidence
-        ],
+        )
+
+    result = AgentResult(
+        agent=agent_name,
+        status="ok",
+        score_fake=llm_response.score_fake,
+        confidence=llm_response.confidence,
+        evidence=evidence_items,
         error=None
     )
 
